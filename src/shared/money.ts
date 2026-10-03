@@ -6,10 +6,13 @@
  * 所有「元 ↔ 分」的转换都必须经过本文件（见 CLAUDE.md §5.1）。
  */
 
-/** 全角数字（０-９）与全角小数点（．） */
-const FULL_WIDTH_RE = /[０-９．]/g
+/** 全角数字（０-９ U+FF10–FF19）、全角逗号（，U+FF0C）、全角小数点（．U+FF0E） */
+const FULL_WIDTH_RE = /[０-９，．]/g
 
-/** 把全角数字和全角小数点转成半角，中文输入法下很容易打出来 */
+/** 严格的千分位写法：1,234 / 1,234,567 / 1,234.56 */
+const COMMA_GROUPED_RE = /^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/
+
+/** 把全角数字、逗号、小数点转成半角——中文输入法下很容易打出来 */
 function toHalfWidth(input: string): string {
   return input.replace(FULL_WIDTH_RE, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
 }
@@ -26,11 +29,20 @@ function toHalfWidth(input: string): string {
 export function yuanToFen(input: string): number | null {
   if (typeof input !== 'string') return null
 
-  const normalized = toHalfWidth(input).replace(/,/g, '').trim()
+  const normalized = toHalfWidth(input).trim()
   if (normalized === '') return null
 
+  // 带千分位逗号时，必须严格符合 1,234,567 的分组写法。
+  // 不能简单地把逗号全剥掉：那样 "1,2,3" 会静默变成 123，
+  // 用户会得到一个自己从没输入过的金额——正是本模块要杜绝的「悄悄算错」。
+  let plain = normalized
+  if (normalized.includes(',')) {
+    if (!COMMA_GROUPED_RE.test(normalized)) return null
+    plain = normalized.replace(/,/g, '')
+  }
+
   // 整数部分可省略（形如 ".5"），小数部分最多两位
-  const matched = /^(\d*)(?:\.(\d{1,2}))?$/.exec(normalized)
+  const matched = /^(\d*)(?:\.(\d{1,2}))?$/.exec(plain)
   if (!matched) return null
 
   const intPart = matched[1] ?? ''

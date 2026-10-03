@@ -29,14 +29,31 @@ describe('yuanToFen — 元转分', () => {
     expect(yuanToFen('  12.34  ')).toBe(1234)
   })
 
-  it('容忍从别处粘贴来的千分位逗号', () => {
+  it('容忍从别处粘贴来的标准千分位逗号', () => {
     expect(yuanToFen('1,234.56')).toBe(123456)
     expect(yuanToFen('1,000,000')).toBe(100000000)
+    expect(yuanToFen('1,234')).toBe(123400)
+  })
+
+  it('拒绝分组位置错误的逗号，绝不静默重新解释', () => {
+    // 这些若被放行，用户会得到一个自己没输入过的金额——正是本模块要杜绝的「悄悄算错」
+    expect(yuanToFen('1,2,3')).toBeNull()
+    expect(yuanToFen('12,34')).toBeNull()
+    expect(yuanToFen('1,2345')).toBeNull()
+    expect(yuanToFen('1,0.5')).toBeNull()
+    expect(yuanToFen(',')).toBeNull()
+    expect(yuanToFen('1,')).toBeNull()
+    expect(yuanToFen(',123')).toBeNull()
   })
 
   it('容忍中文全角数字与全角小数点', () => {
     expect(yuanToFen('１２．３')).toBe(1230)
     expect(yuanToFen('９')).toBe(900)
+  })
+
+  it('容忍中文全角逗号（中文输入法很容易打出来）', () => {
+    expect(yuanToFen('1，234.56')).toBe(123456)
+    expect(yuanToFen('1，000')).toBe(100000)
   })
 
   it('零是合法的换算结果（是否允许记 0 元由表单层判断）', () => {

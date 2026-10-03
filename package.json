@@ -1,5 +1,6 @@
 {
   "name": "ht-jizhang",
+  "productName": "HTJizhang",
   "version": "0.1.0",
   "description": "HT记账 — 本地个人记账桌面软件",
   "author": "HT",
@@ -22,7 +23,7 @@
   },
   "devDependencies": {
     "@tailwindcss/vite": "^4.3.3",
-    "@types/node": "^26.6.4",
+    "@types/node": "^24.19.1",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
