@@ -1,14 +1,39 @@
-import { contextBridge } from 'electron'
-import type { HtApi } from '@shared/types'
+import { contextBridge, ipcRenderer } from 'electron'
+import type { CategoryKind, CreateCategoryInput, HtApi, IpcResult } from '@shared/types'
+import { CATEGORY_CHANNELS } from '@shared/ipcChannels'
 
-// 第 1 阶段只暴露版本号占位。
-// 第 2 阶段起在这里挂数据库 API——所有数据读写都必须经由这里（CLAUDE.md §5.3）。
+/**
+ * 把一个 IPC 调用包成「失败就抛干净中文错误」的形式。
+ *
+ * 主进程那边返回的是 IpcResult，这里负责拆包：
+ * 成功直接给出值，失败就抛出一个 message 就是中文原话的 Error，
+ * 界面里 try/catch 拿到 err.message 就能直接显示给用户。
+ */
+async function call<T>(channel: string, ...args: unknown[]): Promise<T> {
+  const result = (await ipcRenderer.invoke(channel, ...args)) as IpcResult<T>
+  if (result.ok) return result.value
+  throw new Error(result.message)
+}
+
 const api: HtApi = {
   platform: process.platform,
   versions: {
     electron: process.versions.electron,
     chrome: process.versions.chrome,
     node: process.versions.node
+  },
+  categories: {
+    list: () => call(CATEGORY_CHANNELS.list),
+    listArchived: () => call(CATEGORY_CHANNELS.listArchived),
+    usage: () => call(CATEGORY_CHANNELS.usage),
+    create: (input: CreateCategoryInput) => call(CATEGORY_CHANNELS.create, input),
+    rename: (id: number, name: string) => call(CATEGORY_CHANNELS.rename, id, name),
+    setIcon: (id: number, icon: string) => call(CATEGORY_CHANNELS.setIcon, id, icon),
+    reorder: (kind: CategoryKind, parentId: number | null, orderedIds: readonly number[]) =>
+      call(CATEGORY_CHANNELS.reorder, kind, parentId, orderedIds),
+    archive: (id: number) => call(CATEGORY_CHANNELS.archive, id),
+    restore: (id: number) => call(CATEGORY_CHANNELS.restore, id),
+    restoreBuiltins: () => call(CATEGORY_CHANNELS.restoreBuiltins)
   }
 }
 
