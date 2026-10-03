@@ -2,7 +2,7 @@ import { test, expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './db/migrations'
 import { seedBuiltinCategories } from './db/seed'
-import { categoryHandlers } from './ipc'
+import { categoryHandlers, transactionHandlers } from './ipc'
 
 function fresh(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -156,4 +156,97 @@ test('每个处理器在出错时都返回 ok:false，没有一个会把异常�
     const result = await call
     expect(result.ok).toBe(false)
   }
+})
+
+// ---------- 账单 ----------
+
+test('记账走通，返回 ok:true 且带 id', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.create({
+    kind: 'expense',
+    amountFen: 2850,
+    categoryId: idOf(db, 'expense/餐饮/午餐'),
+    occurredOn: '2026-10-03',
+    note: '午饭',
+    paymentMethod: 'wechat'
+  })
+  expect(result.ok).toBe(true)
+  if (result.ok) {
+    expect(result.value.id).toBeGreaterThan(0)
+    expect(result.value.amountFen).toBe(2850)
+  }
+  db.close()
+})
+
+test('金额为 0 时返回干净中文，不带 Electron 英文前缀', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.create({
+    kind: 'expense',
+    amountFen: 0,
+    categoryId: idOf(db, 'expense/餐饮/午餐'),
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'wechat'
+  })
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.message).toContain('金额')
+    expect(result.message).not.toContain('Error')
+  }
+  db.close()
+})
+
+test('没选分类时提示是中文的「请先选择一个分类」', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.create({
+    kind: 'expense',
+    amountFen: 100,
+    categoryId: 0,
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'wechat'
+  })
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toContain('请先选择一个分类')
+  db.close()
+})
+
+test('today 返回合法的本地日期串', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.today()
+  expect(result.ok).toBe(true)
+  if (result.ok) expect(result.value).toMatch(/^\d{4}-\d{2}-\d{2}$/)
+  db.close()
+})
+
+test('recentCategoryIds 初始为空数组，记一笔后就有内容了', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  expect(await h.recentCategoryIds()).toEqual({ ok: true, value: [] })
+
+  await h.create({
+    kind: 'expense',
+    amountFen: 100,
+    categoryId: idOf(db, 'expense/餐饮/早餐'),
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'cash'
+  })
+  const after = await h.recentCategoryIds()
+  expect(after.ok).toBe(true)
+  if (after.ok) expect(after.value).toEqual([idOf(db, 'expense/餐饮/早餐')])
+  db.close()
+})
+
+test('数据库关掉后，账单处理器也返回 ok:false 而不是把异常漏出去', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  db.close()
+  const result = await h.recentCategoryIds()
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toMatch(/[一-鿿]/)
 })

@@ -99,6 +99,14 @@ export interface CategoriesApi {
   restoreBuiltins(): Promise<number>
 }
 
+export interface TransactionsApi {
+  create(input: CreateTransactionInput): Promise<Transaction>
+  /** 最近用过的分类 id，最近的在最前。用于把常用分类置顶。 */
+  recentCategoryIds(): Promise<number[]>
+  /** 今天的本地日期串。由主进程给，避免界面自己算时用错时区（§5.2）。 */
+  today(): Promise<string>
+}
+
 export interface HtApi {
   /** 当前运行的系统：'win32' | 'darwin' | 'linux'，类型上放宽为 string 以保持本文件不依赖 Node */
   readonly platform: string
@@ -108,4 +116,5 @@ export interface HtApi {
     readonly node: string
   }
   readonly categories: CategoriesApi
+  readonly transactions: TransactionsApi
 }

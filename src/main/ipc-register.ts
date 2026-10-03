@@ -7,8 +7,8 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { ipcMain } from 'electron'
-import type { CategoryKind, CreateCategoryInput } from '@shared/types'
-import { CATEGORY_CHANNELS, categoryHandlers } from './ipc'
+import type { CategoryKind, CreateCategoryInput, CreateTransactionInput } from '@shared/types'
+import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS, categoryHandlers, transactionHandlers } from './ipc'
 
 export function registerIpcHandlers(db: DatabaseSync): void {
   const h = categoryHandlers(db)
@@ -27,4 +27,12 @@ export function registerIpcHandlers(db: DatabaseSync): void {
   ipcMain.handle(CATEGORY_CHANNELS.archive, (_event, id: number) => h.archive(id))
   ipcMain.handle(CATEGORY_CHANNELS.restore, (_event, id: number) => h.restore(id))
   ipcMain.handle(CATEGORY_CHANNELS.restoreBuiltins, () => h.restoreBuiltins())
+
+  const t = transactionHandlers(db)
+
+  ipcMain.handle(TRANSACTION_CHANNELS.create, (_event, input: CreateTransactionInput) =>
+    t.create(input)
+  )
+  ipcMain.handle(TRANSACTION_CHANNELS.recentCategoryIds, () => t.recentCategoryIds())
+  ipcMain.handle(TRANSACTION_CHANNELS.today, () => t.today())
 }
