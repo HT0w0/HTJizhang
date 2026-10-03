@@ -23,7 +23,6 @@ const PAGES: Record<PageKey, () => JSX.Element> = {
 
 export default function App(): JSX.Element {
   const [current, setCurrent] = useState<PageKey>('add')
-  const CurrentPage = PAGES[current]
 
   return (
     <div className="flex h-full bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100">
@@ -52,8 +51,23 @@ export default function App(): JSX.Element {
         })}
       </nav>
 
+      {/*
+        四个页面全部保持挂载，只把非当前的隐藏起来。
+        这样切换页面不会卸载组件，「记一笔」填到一半、账单页的搜索词和筛选月份
+        都会原样保留（用户 2026-10-03 明确选择「保留」）。
+
+        不要改回「只渲染当前页」的写法——那会让用户在页面间切换时丢失已填内容。
+      */}
       <main className="min-w-0 flex-1 overflow-y-auto p-8">
-        <CurrentPage />
+        {NAV_ITEMS.map((item) => {
+          const Page = PAGES[item.key]
+
+          return (
+            <div key={item.key} hidden={current !== item.key}>
+              <Page />
+            </div>
+          )
+        })}
       </main>
     </div>
   )
