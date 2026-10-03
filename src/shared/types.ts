@@ -8,8 +8,39 @@
  * 因为渲染进程的类型检查配置里没有引入 Node 的类型声明。
  */
 
+import type { PaymentMethod } from './paymentMethods'
+
+// 再导出一次，让「主进程 / 界面」只需要认 @shared/types 一个入口，
+// 不用去记 PaymentMethod 实际住在哪个文件里。
+export type { PaymentMethod } from './paymentMethods'
+
 /** 一笔账是支出还是收入。分类和账单都带这个字段。 */
 export type CategoryKind = 'expense' | 'income'
+
+/** 一笔账。 */
+export interface Transaction {
+  readonly id: number
+  readonly kind: CategoryKind
+  /** 金额，单位「分」。界面上的 12.34 元在这里是 1234（CLAUDE.md §5.1）。 */
+  readonly amountFen: number
+  /** 必须指向二级小类（§5.12） */
+  readonly categoryId: number
+  /** 本地日期串 'YYYY-MM-DD'，不是时间戳（§5.2） */
+  readonly occurredOn: string
+  readonly note: string
+  readonly paymentMethod: PaymentMethod
+  readonly createdAt: string
+  readonly updatedAt: string
+}
+
+export interface CreateTransactionInput {
+  readonly kind: CategoryKind
+  readonly amountFen: number
+  readonly categoryId: number
+  readonly occurredOn: string
+  readonly note: string
+  readonly paymentMethod: PaymentMethod
+}
 
 /** 一条分类。parentId 为 null 表示一级大类，非 null 表示二级小类。 */
 export interface Category {
