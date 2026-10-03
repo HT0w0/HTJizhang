@@ -2,7 +2,12 @@ import { test, expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './migrations'
 import { seedBuiltinCategories } from './seed'
-import { createTransaction, getTransaction } from './transactions'
+import {
+  createTransaction,
+  getTransaction,
+  recentCategoryIds,
+  DEFAULT_RECENT_LIMIT
+} from './transactions'
 
 function fresh(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -238,5 +243,76 @@ test('连记两笔互不影响（保存后能接着记下一笔）', () => {
   expect(a.id).not.toBe(b.id)
   const n = (db.prepare('SELECT count(*) AS n FROM transactions').get() as { n: number }).n
   expect(n).toBe(2)
+  db.close()
+})
+
+// ---------- 最近用过的分类 ----------
+
+function insertRaw(
+  db: DatabaseSync,
+  categoryId: number,
+  createdAt: string
+): void {
+  db.prepare(
+    `INSERT INTO transactions (kind, amount_fen, category_id, occurred_on, note, payment_method, created_at, updated_at)
+     VALUES ('expense', 100, ?, '2026-10-03', '', 'wechat', ?, ?)`
+  ).run(categoryId, createdAt, createdAt)
+}
+
+test('recentCategoryIds：没记过账时返回空数组', () => {
+  const db = fresh()
+  expect(recentCategoryIds(db)).toEqual([])
+  db.close()
+})
+
+test('recentCategoryIds：按最近使用的先后返回，最近的在最前', () => {
+  const db = fresh()
+  const breakfast = idOf(db, 'expense/餐饮/早餐')
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  const taxi = idOf(db, 'expense/交通/打车网约车')
+
+  insertRaw(db, breakfast, '2026-10-03T01:00:00.000Z')
+  insertRaw(db, lunch, '2026-10-03T02:00:00.000Z')
+  insertRaw(db, taxi, '2026-10-03T03:00:00.000Z')
+
+  expect(recentCategoryIds(db)).toEqual([taxi, lunch, breakfast])
+  db.close()
+})
+
+test('recentCategoryIds：同一个分类记多次只出现一次，按最后一次算', () => {
+  const db = fresh()
+  const breakfast = idOf(db, 'expense/餐饮/早餐')
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+
+  insertRaw(db, lunch, '2026-10-03T01:00:00.000Z')
+  insertRaw(db, breakfast, '2026-10-03T02:00:00.000Z')
+  insertRaw(db, lunch, '2026-10-03T03:00:00.000Z') // 午餐最后一次比早餐晚
+
+  expect(recentCategoryIds(db)).toEqual([lunch, breakfast])
+  db.close()
+})
+
+test('recentCategoryIds：尊重 limit', () => {
+  const db = fresh()
+  insertRaw(db, idOf(db, 'expense/餐饮/早餐'), '2026-10-03T01:00:00.000Z')
+  insertRaw(db, idOf(db, 'expense/餐饮/午餐'), '2026-10-03T02:00:00.000Z')
+  insertRaw(db, idOf(db, 'expense/餐饮/晚餐'), '2026-10-03T03:00:00.000Z')
+  expect(recentCategoryIds(db, 2)).toHaveLength(2)
+  expect(recentCategoryIds(db, 2)).toEqual([
+    idOf(db, 'expense/餐饮/晚餐'),
+    idOf(db, 'expense/餐饮/午餐')
+  ])
+  db.close()
+})
+
+test('recentCategoryIds：默认 limit 是正整数', () => {
+  expect(Number.isInteger(DEFAULT_RECENT_LIMIT)).toBe(true)
+  expect(DEFAULT_RECENT_LIMIT).toBeGreaterThan(0)
+})
+
+test('新记的一笔会立刻变成「最近用过」的第一个（保存后重新打开记账页就能看到它置顶）', () => {
+  const db = fresh()
+  const first = createTransaction(db, valid(db))
+  expect(recentCategoryIds(db)[0]).toBe(first.categoryId)
   db.close()
 })

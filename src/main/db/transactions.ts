@@ -146,3 +146,27 @@ export function getTransaction(db: DatabaseSync, id: number): Transaction | unde
     | undefined
   return row ? toTransaction(row) : undefined
 }
+
+/** 「最近用过」默认取多少个。20 个足够覆盖日常，也不会让 SQL 变重。 */
+export const DEFAULT_RECENT_LIMIT = 20
+
+/**
+ * 最近用过的分类 id，最近的在最前。
+ *
+ * 一个分类记过多次时只出现一次，按**最后一次**记的时间算 ——
+ * 这样才符合直觉：上周常记、这周没记的分类会自然往后排。
+ *
+ * created_at 是 ISO 8601 串，字典序与时间序一致，所以 MAX / ORDER BY 直接可用。
+ */
+export function recentCategoryIds(db: DatabaseSync, limit = DEFAULT_RECENT_LIMIT): number[] {
+  const rows = db
+    .prepare(
+      `SELECT category_id
+         FROM transactions
+        GROUP BY category_id
+        ORDER BY MAX(created_at) DESC
+        LIMIT ?`
+    )
+    .all(limit) as unknown as Array<{ category_id: number }>
+  return rows.map((r) => r.category_id)
+}
