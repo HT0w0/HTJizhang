@@ -12,8 +12,13 @@ const FULL_WIDTH_RE = /[０-９，．]/g
 /** 严格的千分位写法：1,234 / 1,234,567 / 1,234.56 */
 const COMMA_GROUPED_RE = /^\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?$/
 
-/** 把全角数字、逗号、小数点转成半角——中文输入法下很容易打出来 */
-function toHalfWidth(input: string): string {
+/**
+ * 把全角数字、逗号、小数点转成半角——中文输入法下很容易打出来。
+ *
+ * 导出给界面用：输入框要在用户**还在打字时**就把全角转成半角，
+ * 否则全角字符根本进不了输入框（用户以为自己打了字，屏幕上什么都没有）。
+ */
+export function toHalfWidth(input: string): string {
   return input.replace(FULL_WIDTH_RE, (ch) => String.fromCharCode(ch.charCodeAt(0) - 0xfee0))
 }
 
