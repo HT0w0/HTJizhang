@@ -88,3 +88,103 @@ test('版本号非递增的迁移表会被拒绝（防止写错顺序静默跳�
   expect(() => migrate(db, wrong)).toThrow()
   db.close()
 })
+
+// ---------- 结构约束（CLAUDE.md §5.2 要求日期一律本地 YYYY-MM-DD） ----------
+
+function seedOneCategory(db: DatabaseSync): number {
+  const r = db
+    .prepare(
+      `INSERT INTO categories (kind, parent_id, name, icon, sort_order, is_archived, builtin_key, created_at, updated_at)
+       VALUES ('expense', NULL, '餐饮', '🍜', 0, 0, 'expense/餐饮', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`
+    )
+    .run()
+  const id = Number(r.lastInsertRowid)
+  db.prepare(
+    `INSERT INTO categories (kind, parent_id, name, icon, sort_order, is_archived, builtin_key, created_at, updated_at)
+     VALUES ('expense', ?, '早餐', '🥐', 0, 0, 'expense/餐饮/早餐', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`
+  ).run(id)
+  return id
+}
+
+function insertTx(db: DatabaseSync, occurredOn: string): void {
+  const breakfast = (
+    db.prepare("SELECT id FROM categories WHERE builtin_key = 'expense/餐饮/早餐'").get() as {
+      id: number
+    }
+  ).id
+  db.prepare(
+    `INSERT INTO transactions (kind, amount_fen, category_id, occurred_on, note, payment_method, created_at, updated_at)
+     VALUES ('expense', 1200, ?, ?, '', 'wechat', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`
+  ).run(breakfast, occurredOn)
+}
+
+test('合法日期能被写入', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  expect(() => insertTx(db, '2026-10-03')).not.toThrow()
+  db.close()
+})
+
+test('日期格式写成 2026/10/03 会被数据库拒绝（防止时区与格式跑偏）', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  expect(() => insertTx(db, '2026/10/03')).toThrow()
+  db.close()
+})
+
+test('日期写成 UTC 时间戳会被数据库拒绝', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  expect(() => insertTx(db, '2026-10-03T00:00:00.000Z')).toThrow()
+  db.close()
+})
+
+test('不存在的日期 2026-13-45 会被数据库拒绝', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  expect(() => insertTx(db, '2026-13-45')).toThrow()
+  db.close()
+})
+
+test('个位数不补零的 2026-1-3 会被拒绝（要求严格 YYYY-MM-DD）', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  expect(() => insertTx(db, '2026-1-3')).toThrow()
+  db.close()
+})
+
+test('金额必须为正整数：0 与负数都被拒绝', () => {
+  const db = fresh()
+  migrate(db)
+  seedOneCategory(db)
+  const breakfast = (
+    db.prepare("SELECT id FROM categories WHERE builtin_key = 'expense/餐饮/早餐'").get() as {
+      id: number
+    }
+  ).id
+  const insert = db.prepare(
+    `INSERT INTO transactions (kind, amount_fen, category_id, occurred_on, note, payment_method, created_at, updated_at)
+     VALUES ('expense', ?, ?, '2026-10-03', '', 'wechat', '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`
+  )
+  expect(() => insert.run(0, breakfast)).toThrow()
+  expect(() => insert.run(-100, breakfast)).toThrow()
+  expect(() => insert.run(1, breakfast)).not.toThrow()
+  db.close()
+})
+
+test('categories.kind 只接受 expense / income', () => {
+  const db = fresh()
+  migrate(db)
+  const insert = db.prepare(
+    `INSERT INTO categories (kind, parent_id, name, icon, sort_order, is_archived, builtin_key, created_at, updated_at)
+     VALUES (?, NULL, 'x', '❓', 0, 0, NULL, '2026-10-03T00:00:00.000Z', '2026-10-03T00:00:00.000Z')`
+  )
+  expect(() => insert.run('支出')).toThrow()
+  expect(() => insert.run('expense')).not.toThrow()
+  db.close()
+})

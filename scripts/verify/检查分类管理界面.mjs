@@ -246,6 +246,112 @@ async function main() {
     const restoredOrder = await cdp.evaluate(`window.__T.names(window.__T.children())`)
     check('再点一次能还原顺序', JSON.stringify(restoredOrder) === JSON.stringify(children), restoredOrder[0])
 
+    // ---------- 4b. 一级大类的 ↑↓ 按钮也要能排序（复核发现的漏测点） ----------
+    const majorBefore = await cdp.evaluate(`window.__T.names(window.__T.majors())`)
+    const majorMoved = await cdp.evaluate(`
+      (function () {
+        // 挑第二个大类（第一个的 ↑ 是禁用的），点它的 ↑
+        var list = window.__T.majors()
+        if (list.length < 2) return '大类太少'
+        var second = list[1]
+        var btn = window.__T.one('major-up-' + window.__T.idOf(second))
+        if (!btn) return '大类行上没有上移按钮'
+        btn.click()
+        return 'ok'
+      })()
+    `)
+    check('点一级大类的 ↑ 按钮', majorMoved === 'ok', majorMoved)
+    await sleep(600)
+
+    const majorAfter = await cdp.evaluate(`window.__T.names(window.__T.majors())`)
+    const majorErr = await cdp.evaluate(`
+      (function () { var b = window.__T.one('error-banner'); return b ? window.__T.label(b) : '' })()
+    `)
+    check(
+      '一级大类的 ↑ 真的把它移到了第一位（没有报错）',
+      majorAfter[0] === majorBefore[1] && majorAfter[1] === majorBefore[0],
+      `改前 ${majorBefore.slice(0, 2).join(' / ')}  改后 ${majorAfter.slice(0, 2).join(' / ')}`
+    )
+    check('点大类 ↑ 之后没有出现错误提示', majorErr === '', majorErr)
+
+    // 还原
+    await cdp.evaluate(`
+      (function () {
+        var list = window.__T.majors()
+        window.__T.one('major-down-' + window.__T.idOf(list[0])).click()
+      })()
+    `)
+    await sleep(600)
+    const majorRestored = await cdp.evaluate(`window.__T.names(window.__T.majors())`)
+    check(
+      '大类再点一次 ↓ 能还原顺序',
+      JSON.stringify(majorRestored) === JSON.stringify(majorBefore),
+      majorRestored.slice(0, 2).join(' / ')
+    )
+
+    // ---------- 4c. 一级大类也要能改名（产品文档 3.2 举的例子就是改大类） ----------
+    const majorRenameOpened = await cdp.evaluate(`
+      (function () {
+        var m = window.__T.majors().find(function (x) {
+          return window.__T.label(x).indexOf('交通') >= 0
+        })
+        if (!m) return '没找到交通'
+        var btn = window.__T.one('major-rename-' + window.__T.idOf(m))
+        if (!btn) return '大类行上没有改名按钮'
+        btn.click()
+        return 'ok'
+      })()
+    `)
+    check('一级大类行上有改名入口', majorRenameOpened === 'ok', majorRenameOpened)
+    await sleep(350)
+
+    if (majorRenameOpened === 'ok') {
+      await cdp.evaluate(`
+        (function () {
+          var input = document.querySelector('[data-testid^="major-rename-input-"]')
+          window.__T.setInput(input, '出行')
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        })()
+      `)
+      await sleep(700)
+      const renamedMajors = await cdp.evaluate(`window.__T.names(window.__T.majors())`)
+      check(
+        '把一级大类「交通」改名成「出行」真的生效',
+        renamedMajors.some((n) => n.indexOf('出行') >= 0) &&
+          !renamedMajors.some((n) => n.indexOf('交通') >= 0),
+        renamedMajors.slice(0, 3).join(' / ')
+      )
+      // 改回去
+      await cdp.evaluate(`
+        (function () {
+          var m = window.__T.majors().find(function (x) {
+            return window.__T.label(x).indexOf('出行') >= 0
+          })
+          window.__T.one('major-rename-' + window.__T.idOf(m)).click()
+        })()
+      `)
+      await sleep(300)
+      await cdp.evaluate(`
+        (function () {
+          var input = document.querySelector('[data-testid^="major-rename-input-"]')
+          window.__T.setInput(input, '交通')
+          input.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }))
+        })()
+      `)
+      await sleep(700)
+    }
+
+    // 回到「餐饮」继续后面的小类测试
+    await cdp.evaluate(`
+      (function () {
+        var m = window.__T.majors().find(function (x) {
+          return window.__T.label(x).indexOf('餐饮') >= 0
+        })
+        if (m) m.click()
+      })()
+    `)
+    await sleep(400)
+
     // ---------- 5. 重名给出中文提示，且不新增 ----------
     const dup = await cdp.evaluate(`
       (function () {
@@ -369,7 +475,7 @@ async function main() {
     )
 
     // ---------- 9. 删整个大类（用界面上的删除按钮，不用 API） ----------
-    const majorBefore = await cdp.evaluate(`window.__T.majors().length`)
+    const majorsBeforeArchive = await cdp.evaluate(`window.__T.majors().length`)
     const majorDialog = await cdp.evaluate(`
       (function () {
         var m = window.__T.majors().find(function (x) {
@@ -400,7 +506,7 @@ async function main() {
     await cdp.evaluate(`window.__T.click(window.__T.one('confirm-ok'))`)
     await sleep(800)
     const afterArchiveMajor = await cdp.evaluate(`window.__T.majors().length`)
-    check('归档整个「餐饮」后，左栏大类少一个', afterArchiveMajor === majorBefore - 1, `${afterArchiveMajor} 个`)
+    check('归档整个「餐饮」后，左栏大类少一个', afterArchiveMajor === majorsBeforeArchive - 1, `${afterArchiveMajor} 个`)
 
     const archivedAfterMajor = await cdp.evaluate(`
       (function () {
@@ -421,7 +527,7 @@ async function main() {
     const afterRestoreBuiltins = await cdp.evaluate(`window.__T.majors().length`)
     check(
       '点「恢复内置分类」后「餐饮」回来了',
-      afterRestoreBuiltins === majorBefore,
+      afterRestoreBuiltins === majorsBeforeArchive,
       `${afterRestoreBuiltins} 个`
     )
     const restoredChildren = await cdp.evaluate(`
@@ -443,6 +549,85 @@ async function main() {
       (function () { var n = window.__T.one('notice-banner'); return n ? window.__T.label(n) : '' })()
     `)
     check('恢复后给出了中文反馈', noticeText.indexOf('恢复') >= 0, noticeText)
+
+    // ---------- 10b. 归档掉最后一个小类，界面要显示空状态而不是崩掉 ----------
+    // （复核指出的验证缺口：原脚本只走 9→8→9，从没走到 0）
+    // 全部走真实界面输入框，顺便把小类的「新建 → 删除」整条路径也验了
+    await cdp.evaluate(`
+      (function () {
+        window.__T.setInput(window.__T.one('new-major-name'), '验证用大类')
+        window.__T.one('new-major-add').click()
+      })()
+    `)
+    await sleep(700)
+    const probeMajor = await cdp.evaluate(`
+      (function () {
+        var m = window.__T.majors().find(function (x) {
+          return window.__T.label(x).indexOf('验证用大类') >= 0
+        })
+        if (!m) return null
+        m.click()
+        return window.__T.idOf(m)
+      })()
+    `)
+    check('用界面输入框新建一级大类成功', typeof probeMajor === 'number', `id=${probeMajor}`)
+    await sleep(400)
+
+    const freshEmpty = await cdp.evaluate(`
+      (function () {
+        var el = window.__T.one('children-empty')
+        return el ? window.__T.label(el) : '（没有空状态）'
+      })()
+    `)
+    check('刚建好的大类下显示「还没有小类」空状态', freshEmpty.indexOf('还没有小类') >= 0, freshEmpty)
+
+    await cdp.evaluate(`
+      (function () {
+        window.__T.setInput(window.__T.one('new-child-name'), '唯一的小类')
+        window.__T.one('new-child-add').click()
+      })()
+    `)
+    await sleep(700)
+    const probeChildren = await cdp.evaluate(`window.__T.children().length`)
+    check('用界面输入框新建小类成功', probeChildren === 1, `${probeChildren} 个`)
+
+    // 删掉这唯一的小类，看界面会不会崩
+    await cdp.evaluate(`
+      (function () {
+        var c = window.__T.children()[0]
+        window.__T.one('delete-' + window.__T.idOf(c)).click()
+      })()
+    `)
+    await sleep(350)
+    await cdp.evaluate(`window.__T.click(window.__T.one('confirm-ok'))`)
+    await sleep(700)
+
+    const emptyState = await cdp.evaluate(`
+      (function () {
+        var el = window.__T.one('children-empty')
+        return el ? window.__T.label(el) : '（没有空状态）'
+      })()
+    `)
+    check(
+      '最后一个小类被归档后，右栏显示空状态而不是空白或崩溃',
+      emptyState.indexOf('还没有小类') >= 0,
+      emptyState
+    )
+    const stillAlive = await cdp.evaluate(`!!window.__T.one('category-manager')`)
+    check('空状态下界面仍然正常挂载（没崩）', stillAlive === true)
+
+    // 清理验证数据：删掉这个验证用大类
+    await cdp.evaluate(`
+      (function () {
+        var m = window.__T.majors().find(function (x) {
+          return window.__T.label(x).indexOf('验证用大类') >= 0
+        })
+        if (m) window.__T.one('major-delete-' + window.__T.idOf(m)).click()
+      })()
+    `)
+    await sleep(350)
+    await cdp.evaluate(`window.__T.click(window.__T.one('confirm-ok'))`)
+    await sleep(700)
 
     // ---------- 11. 界面数据与数据库最终对得上 ----------
     const finalState = await cdp.evaluate(`

@@ -50,19 +50,30 @@ export interface CategoryHandlers {
   restoreBuiltins(): Promise<IpcResult<number>>
 }
 
+/** 用来区分「我们自己抛的中文提示」和「数据库/文件系统抛的英文错误」。 */
+const HAS_CHINESE = /[一-鿿]/
+
 /**
- * 把任意抛出物转成一句能显示给用户的中文。
+ * 把任意抛出物转成一段用户看得懂的话。
  *
- * 注意不能简单地把 error.message 直接往下传：底层抛的可能是
- * "SQLITE_BUSY"、"database is not open" 这类英文，
- * 但本项目的仓储层已经保证「面向用户的失败都抛中文 Error」，
- * 所以这里以 Error.message 为主，兜底才用其它形式。
+ * 分两种情况：
+ * - 我们自己抛的错误：仓储层的业务校验一律抛中文，原样透传即可。
+ * - 数据库/文件系统抛的错误：这些是英文，比如磁盘写满时的
+ *   "database or disk is full"、数据文件被网盘或杀软锁住时的
+ *   "database is locked"、WAL 写失败时的 "disk I/O error"。
+ *   用户看不懂英文，必须在前面加一句中文说明；**但英文原文要保留** ——
+ *   它是出问题时唯一的排查线索，去掉之后开发者就无从下手了。
  */
 function toMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim() !== '') return error.message
-  const text = String(error)
-  if (text.trim() !== '' && text !== 'undefined' && text !== 'null') return text
-  return '操作失败，请重试。若反复出现，请把刚才的操作告诉开发者。'
+  const text = (error instanceof Error ? error.message : String(error)).trim()
+
+  if (text === '' || text === 'undefined' || text === 'null') {
+    return '操作失败，请重试。若反复出现，请把刚才的操作告诉开发者。'
+  }
+
+  if (HAS_CHINESE.test(text)) return text
+
+  return `程序内部出错了：${text}\n请先重试一次。若反复出现，请把这句话发给开发者。`
 }
 
 /** 包一层：成功返回 { ok: true, value }，失败返回 { ok: false, message }。 */

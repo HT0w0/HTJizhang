@@ -49,7 +49,17 @@ CREATE TABLE transactions (
   kind           TEXT    NOT NULL CHECK (kind IN ('expense','income')),
   amount_fen     INTEGER NOT NULL CHECK (amount_fen > 0),
   category_id    INTEGER NOT NULL REFERENCES categories(id),
-  occurred_on    TEXT    NOT NULL,
+  -- 日期一律本地日期串 YYYY-MM-DD，不存时间戳（CLAUDE.md §5.2）。
+  -- 这条 CHECK 把约定变成数据库层面的硬约束：「本月」统计在跨月边界算错，
+  -- 根源就是日期格式或时区跑偏，而那种错用户当场看不出来。
+  --
+  -- ⚠️ 必须用 NULL 安全的 IS，不能用 =。实测：date('2026/10/03') 返回 NULL，
+  -- 而 NULL = '2026/10/03' 的结果也是 NULL —— SQLite 的 CHECK 只在结果为「假」
+  -- 时拒绝，结果为 NULL 时**放行**。用 = 会让所有非法日期悄悄漏过去。
+  -- 实测 IS 的覆盖范围：'2026/10/03'、'2026-1-3'、'2026-13-45'、
+  -- '2026-10-03T00:00:00.000Z'、乃至日历上不存在的 '2026-02-30'（date() 会把它
+  -- 归一成 2026-03-02，与原文不等）全部拒绝。
+  occurred_on    TEXT    NOT NULL CHECK (date(occurred_on) IS occurred_on),
   note           TEXT    NOT NULL DEFAULT '',
   payment_method TEXT    NOT NULL DEFAULT 'other',
   created_at     TEXT    NOT NULL,

@@ -34,6 +34,8 @@ export default function CategoryManager(): JSX.Element {
   const [pendingDelete, setPendingDelete] = useState<PendingDelete | null>(null)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingName, setEditingName] = useState('')
+  const [editingIcon, setEditingIcon] = useState('❓')
+  const [editingOriginalIcon, setEditingOriginalIcon] = useState('❓')
 
   const [newMajorName, setNewMajorName] = useState('')
   const [newMajorIcon, setNewMajorIcon] = useState('❓')
@@ -81,11 +83,23 @@ export default function CategoryManager(): JSX.Element {
     }
   }
 
-  /** 把 given 列表里 id 的位置挪动 delta 位，并落库。 */
-  async function moveById(ids: readonly number[], id: number, delta: number): Promise<void> {
+  /**
+   * 把 ids 列表里 id 的位置挪动 delta 位，并落库。
+   *
+   * parentId 必须由调用方显式传入（大类的兄弟层是 null，小类的兄弟层是其父大类 id）。
+   * 早先的写法是内部直接取「当前选中的大类 id」当父级，结果在大类行上按 ↑↓ 时
+   * 会发出「把 11 个大类 id 排到某个大类下面」这种自相矛盾的请求，被仓库层拒绝，
+   * 用户看到的是每次点都报错、顺序纹丝不动。**不要再从 selected 里推父级。**
+   */
+  async function moveById(
+    ids: readonly number[],
+    id: number,
+    delta: number,
+    parentId: number | null
+  ): Promise<void> {
     const next = swap(ids, ids.indexOf(id), delta)
     if (!next) return
-    await run(() => window.ht.categories.reorder(kind, selected?.id ?? null, next))
+    await run(() => window.ht.categories.reorder(kind, parentId, next))
   }
 
   async function handleDrop(draggedId: number, targetId: number): Promise<void> {
@@ -98,6 +112,31 @@ export default function CategoryManager(): JSX.Element {
     next.splice(from, 1)
     next.splice(to, 0, draggedId)
     await run(() => window.ht.categories.reorder(kind, selected.id, next))
+  }
+
+  /** 开始编辑某条分类（大类和二级小类共用）。 */
+  function beginEdit(node: CategoryNode): void {
+    setEditingId(node.id)
+    setEditingName(node.name)
+    setEditingIcon(node.icon)
+    setEditingOriginalIcon(node.icon)
+  }
+
+  /**
+   * 保存编辑：改名 + （只有真改过才）改图标。
+   *
+   * 图标没变时不发第二个请求 —— 少一次无谓的写库，
+   * 也少一次「明明没改却也走进失败分支」的机会。
+   */
+  async function saveEdit(id: number): Promise<void> {
+    const name = editingName
+    const icon = editingIcon
+    const iconChanged = icon !== editingOriginalIcon
+    const ok = await run(async () => {
+      await window.ht.categories.rename(id, name)
+      if (iconChanged) await window.ht.categories.setIcon(id, icon)
+    })
+    if (ok) setEditingId(null)
   }
 
   function askDelete(node: CategoryNode): void {
@@ -184,12 +223,39 @@ export default function CategoryManager(): JSX.Element {
             {majors.map((major, index) => (
               <li
                 key={major.id}
-                className={`group flex items-center gap-1 px-2 py-1.5 text-sm transition-colors ${
+                className={`group flex flex-col gap-1 px-2 py-1.5 text-sm transition-colors ${
                   selected?.id === major.id
                     ? 'bg-blue-600 text-white'
                     : 'hover:bg-slate-100 dark:hover:bg-slate-700'
                 }`}
               >
+                {/* 编辑态直接替换整行内容，不用浮层 ——
+                    外层 ul 有 overflow-y-auto，浮层会被裁掉 */}
+                {editingId === major.id ? (
+                  <div className="flex w-full items-center gap-1">
+                    <CategoryIconPicker
+                      value={editingIcon}
+                      onChange={setEditingIcon}
+                      testId={`major-icon-${major.id}`}
+                    />
+                    <input
+                      autoFocus
+                      value={editingName}
+                      aria-label="大类名称"
+                      data-testid={`major-rename-input-${major.id}`}
+                      onChange={(e) => setEditingName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault()
+                          void saveEdit(major.id)
+                        }
+                        if (e.key === 'Escape') setEditingId(null)
+                      }}
+                      className="min-w-0 flex-1 rounded border border-blue-500 px-2 py-0.5 text-slate-800 dark:bg-slate-700 dark:text-slate-100"
+                    />
+                  </div>
+                ) : (
+                <div className="flex w-full items-center gap-1">
                 <button
                   type="button"
                   data-testid={`major-${major.id}`}
@@ -225,7 +291,8 @@ export default function CategoryManager(): JSX.Element {
                       void moveById(
                         majors.map((m) => m.id),
                         major.id,
-                        -1
+                        -1,
+                        null
                       )
                     }
                     className="rounded px-0.5 opacity-60 hover:bg-black/10 disabled:opacity-20"
@@ -241,12 +308,22 @@ export default function CategoryManager(): JSX.Element {
                       void moveById(
                         majors.map((m) => m.id),
                         major.id,
-                        1
+                        1,
+                        null
                       )
                     }
                     className="rounded px-0.5 opacity-60 hover:bg-black/10 disabled:opacity-20"
                   >
                     ↓
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`重命名「${major.name}」`}
+                    data-testid={`major-rename-${major.id}`}
+                    onClick={() => beginEdit(major)}
+                    className="rounded px-0.5 opacity-60 hover:bg-black/20"
+                  >
+                    ✏️
                   </button>
                   <button
                     type="button"
@@ -258,6 +335,8 @@ export default function CategoryManager(): JSX.Element {
                     🗑️
                   </button>
                 </span>
+                </div>
+                )}
               </li>
             ))}
 
@@ -334,30 +413,34 @@ export default function CategoryManager(): JSX.Element {
                     <span aria-hidden="true" className="cursor-grab text-slate-300">
                       ⠿
                     </span>
-                    <span aria-hidden="true">{child.icon}</span>
-
                     {editingId === child.id ? (
-                      <input
-                        autoFocus
-                        value={editingName}
-                        aria-label="分类名称"
-                        data-testid={`rename-input-${child.id}`}
-                        onChange={(e) => setEditingName(e.target.value)}
-                        onBlur={() => setEditingId(null)}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter') {
-                            e.preventDefault()
-                            const name = editingName
-                            void run(() => window.ht.categories.rename(child.id, name)).then((ok) => {
-                              if (ok) setEditingId(null)
-                            })
-                          }
-                          if (e.key === 'Escape') setEditingId(null)
-                        }}
-                        className="min-w-0 flex-1 rounded border border-blue-400 px-2 py-0.5 dark:bg-slate-700"
-                      />
+                      <>
+                        <CategoryIconPicker
+                          value={editingIcon}
+                          onChange={setEditingIcon}
+                          testId={`child-icon-${child.id}`}
+                        />
+                        <input
+                          autoFocus
+                          value={editingName}
+                          aria-label="分类名称"
+                          data-testid={`rename-input-${child.id}`}
+                          onChange={(e) => setEditingName(e.target.value)}
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              e.preventDefault()
+                              void saveEdit(child.id)
+                            }
+                            if (e.key === 'Escape') setEditingId(null)
+                          }}
+                          className="min-w-0 flex-1 rounded border border-blue-400 px-2 py-0.5 dark:bg-slate-700"
+                        />
+                      </>
                     ) : (
-                      <span className="min-w-0 flex-1 truncate">{child.name}</span>
+                      <>
+                        <span aria-hidden="true">{child.icon}</span>
+                        <span className="min-w-0 flex-1 truncate">{child.name}</span>
+                      </>
                     )}
 
                     <span className="shrink-0 text-xs text-slate-400">{usage[child.id] ?? 0} 笔</span>
@@ -371,7 +454,8 @@ export default function CategoryManager(): JSX.Element {
                         void moveById(
                           selected.children.map((c) => c.id),
                           child.id,
-                          -1
+                          -1,
+                          selected.id
                         )
                       }
                       className="shrink-0 rounded px-1 text-slate-400 transition-colors hover:bg-slate-100 disabled:opacity-30 dark:hover:bg-slate-700"
@@ -387,7 +471,8 @@ export default function CategoryManager(): JSX.Element {
                         void moveById(
                           selected.children.map((c) => c.id),
                           child.id,
-                          1
+                          1,
+                          selected.id
                         )
                       }
                       className="shrink-0 rounded px-1 text-slate-400 transition-colors hover:bg-slate-100 disabled:opacity-30 dark:hover:bg-slate-700"
@@ -399,8 +484,7 @@ export default function CategoryManager(): JSX.Element {
                       aria-label={`重命名「${child.name}」`}
                       data-testid={`rename-${child.id}`}
                       onClick={() => {
-                        setEditingId(child.id)
-                        setEditingName(child.name)
+                        beginEdit(child)
                       }}
                       className="shrink-0 rounded px-1 text-slate-400 transition-colors hover:bg-slate-100 dark:hover:bg-slate-700"
                     >

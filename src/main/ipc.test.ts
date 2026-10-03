@@ -38,15 +38,33 @@ test('失败时返回 ok:false 和干净的中文，不带 Electron 那串英文
   db.close()
 })
 
-test('底层抛出的非 Error 对象也被兜住，不会把空字符串当消息传出去', async () => {
+test('数据库层的英文错误不会原样甩给用户（磁盘满/文件被锁时就会走到这里）', async () => {
   const db = fresh()
   const h = categoryHandlers(db)
-  db.close() // 关掉连接，让后续调用必然失败
+  db.close() // 关掉连接，让后续调用抛出 SQLite 的英文错误 "database is not open"
+
+  const result = await h.list()
+  expect(result.ok).toBe(false)
+  if (result.ok) return
+
+  // 用户看不懂英文，消息里必须至少有一段中文说明
+  expect(result.message).toMatch(/[一-鿿]/)
+  // 但不能把英文原文丢掉——出了问题时这句话是唯一的排查线索
+  expect(result.message).toContain('database is not open')
+  expect(result.message).not.toMatch(/^database is not open$/)
+})
+
+test('底层抛出的非 Error 对象也被兜住，不会把空字符串或 undefined 当消息传出去', async () => {
+  const db = fresh()
+  const h = categoryHandlers(db)
+  db.close()
   const result = await h.list()
   expect(result.ok).toBe(false)
   if (!result.ok) {
     expect(typeof result.message).toBe('string')
     expect(result.message.length).toBeGreaterThan(0)
+    expect(result.message).not.toBe('undefined')
+    expect(result.message).not.toBe('null')
   }
 })
 
