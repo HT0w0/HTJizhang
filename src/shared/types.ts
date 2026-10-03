@@ -9,6 +9,9 @@
  * 硬性要求：本文件不得依赖任何一方的运行环境专有类型（例如 Node 的 NodeJS 命名空间），
  * 因为渲染进程的类型检查配置里没有引入 Node 的类型声明。
  */
+/** 一笔账是支出还是收入。分类和账单都带这个字段。 */
+export type CategoryKind = 'expense' | 'income'
+
 export interface HtApi {
   /** 当前运行的系统：'win32' | 'darwin' | 'linux'，类型上放宽为 string 以保持本文件不依赖 Node */
   readonly platform: string
