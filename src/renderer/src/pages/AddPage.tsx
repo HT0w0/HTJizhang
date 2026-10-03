@@ -9,7 +9,7 @@ import CategoryPicker from '../components/CategoryPicker'
 import PaymentMethodPicker from '../components/PaymentMethodPicker'
 import SaveToast from '../components/SaveToast'
 
-export default function AddPage(): JSX.Element {
+export default function AddPage({ active }: { active: boolean }): JSX.Element {
   const [kind, setKind] = useState<CategoryKind>('expense')
   const [amountText, setAmountText] = useState('')
   const [categoryId, setCategoryId] = useState<number | null>(null)
@@ -20,6 +20,8 @@ export default function AddPage(): JSX.Element {
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
   const [categoryName, setCategoryName] = useState('')
+  /** 每记完一笔 +1，用来让分类选择器的「最近用过」置顶顺序跟上。 */
+  const [recentKey, setRecentKey] = useState(0)
 
   /**
    * 用户有没有手动改过日期。
@@ -94,12 +96,22 @@ export default function AddPage(): JSX.Element {
       })
 
       // 用户确认过：清掉金额、备注、分类（分类必须清，否则忘了改就会静默记错），
-      // 保留日期和支付方式（一顿饭之内通常不变，留着能少点两下）
+      // 保留支付方式（一顿饭之内通常不变，留着能少点两下）
       setToast(`已记下：${categoryName || '这笔'} ${formatYuan(created.amountFen)} 元`)
       setAmountText('')
       setNote('')
       setCategoryId(null)
       setCategoryName('')
+
+      // 日期只保留「今天」：把日期重新设成今天并清掉手动改过的标记。
+      // 用户确认过这个取舍 —— 补记一笔旧账后如果日期一直留着，
+      // 后面每一笔都会被静默记到那个旧日期，等月底对总账才发现，
+      // 而且已经找不到是哪几笔。宁可让他重新选一次。
+      const today = await window.ht.transactions.today()
+      setOccurredOn(today)
+      dateTouched.current = false
+
+      setRecentKey((n) => n + 1)
       focusAmount()
     } catch (e) {
       // 失败时**保留所有已填内容** —— 不能让用户填好的账凭空消失
@@ -111,7 +123,9 @@ export default function AddPage(): JSX.Element {
   }
 
   const fen = yuanToFen(amountText)
-  const amountInvalid = amountText !== '' && (fen === null || fen <= 0)
+  // 只在「确实算出了 0 元」时标红。打字中间态（"12."、"."）算不出数，
+  // 但那不算错，标红只会让人以为打错了。
+  const amountInvalid = fen !== null && fen <= 0
   const canSave = fen !== null && fen > 0 && categoryId !== null && !saving
 
   function switchKind(next: CategoryKind): void {
@@ -174,6 +188,8 @@ export default function AddPage(): JSX.Element {
         <CategoryPicker
           kind={kind}
           selectedId={categoryId}
+          active={active}
+          refreshKey={recentKey}
           onSelect={(id) => {
             setCategoryId(id)
             setError('')
@@ -196,6 +212,7 @@ export default function AddPage(): JSX.Element {
             onChange={(e) => {
               dateTouched.current = true
               setOccurredOn(e.target.value)
+              setError('')
             }}
             className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700"
           />
@@ -213,19 +230,28 @@ export default function AddPage(): JSX.Element {
           value={note}
           placeholder="可以不填"
           maxLength={200}
-          onChange={(e) => setNote(e.target.value)}
+          onChange={(e) => {
+            setNote(e.target.value)
+            setError('')
+          }}
           className="rounded-lg border border-slate-300 px-3 py-1.5 text-sm dark:border-slate-600 dark:bg-slate-700"
         />
 
         <span className="text-sm text-slate-500 dark:text-slate-400">支付</span>
-        <PaymentMethodPicker value={paymentMethod} onChange={setPaymentMethod} />
+        <PaymentMethodPicker
+          value={paymentMethod}
+          onChange={(next) => {
+            setPaymentMethod(next)
+            setError('')
+          }}
+        />
       </div>
 
       <div className="mt-6 space-y-3">
         {error !== '' && (
           <p
             role="alert"
-            data-testid="error-banner"
+            data-testid="add-error"
             className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-700 dark:bg-red-950 dark:text-red-300"
           >
             {error}
@@ -234,7 +260,7 @@ export default function AddPage(): JSX.Element {
         <SaveToast text={toast} />
       </div>
 
-      <div className="mt-6 flex justify-center">
+      <div className="mt-6 flex flex-col items-center gap-2">
         <button
           type="button"
           data-testid="save"
@@ -244,10 +270,30 @@ export default function AddPage(): JSX.Element {
         >
           {saving ? '保存中…' : '保 存'}
         </button>
+
+        {/*
+          按钮禁用时必须说清「还差什么」。
+          浏览器不会给禁用的按钮派发点击事件，所以鼠标用户点了毫无反应、
+          屏幕上也没有任何字告诉他缺了什么，只能自己猜。
+        */}
+        <p data-testid="save-hint" className="text-xs text-slate-400">
+          {missingRequirement(fen, categoryId) ?? '在金额框里按回车也能保存'}
+        </p>
       </div>
-      <p className="mt-2 text-center text-xs text-slate-400">在金额框里按回车也能保存</p>
     </section>
   )
+}
+
+/**
+ * 保存按钮为什么不能点。都满足时返回 null。
+ *
+ * 存在的理由：浏览器的禁用按钮不会派发点击事件，不给提示的话
+ * 鼠标用户点了完全没反应、也不知道缺什么。
+ */
+function missingRequirement(fen: number | null, categoryId: number | null): string | null {
+  if (fen === null || fen <= 0) return '还差一步：请输入金额'
+  if (categoryId === null) return '还差一步：请选择分类'
+  return null
 }
 
 /** 取分类名字，用于保存后的确认条。取不到就返回空串，不影响记账。 */

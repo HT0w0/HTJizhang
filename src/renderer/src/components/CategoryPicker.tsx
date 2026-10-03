@@ -8,6 +8,10 @@ interface CategoryPickerProps {
   readonly kind: CategoryKind
   readonly selectedId: number | null
   readonly onSelect: (id: number) => void
+  /** 记账页当前是不是正在显示的那一页。切回来时要重新拉数据。 */
+  readonly active: boolean
+  /** 每次成功记账后 +1，用来让「最近用过」的置顶顺序跟上。 */
+  readonly refreshKey: number
 }
 
 /**
@@ -22,7 +26,9 @@ interface CategoryPickerProps {
 export default function CategoryPicker({
   kind,
   selectedId,
-  onSelect
+  onSelect,
+  active,
+  refreshKey
 }: CategoryPickerProps): JSX.Element {
   const [tree, setTree] = useState<readonly CategoryNode[]>([])
   const [recentIds, setRecentIds] = useState<readonly number[]>([])
@@ -41,9 +47,20 @@ export default function CategoryPicker({
     setRecentIds(recent)
   }, [])
 
+  /**
+   * 拉数据的时机：
+   * - 组件挂载时（第一次打开软件）
+   * - active 从 false 变成 true（用户从别的页面切回来）
+   * - refreshKey 变化（刚记完一笔，「最近用过」的顺序要跟上）
+   *
+   * **必须包含 active**：四个页面常驻挂载，只在挂载时拉一次的话，
+   * 用户在设置页新建的大类在记账页里根本看不到 —— 而大类只能从设置页创建，
+   * 这是常规操作，用户会以为软件把数据弄丢了。
+   */
   useEffect(() => {
+    if (!active) return
     reload().catch((e: unknown) => setError((e as Error).message))
-  }, [reload])
+  }, [reload, active, refreshKey])
 
   // 只留当前收支类型的分类，再按「最近用过」重排
   const majors = useMemo(

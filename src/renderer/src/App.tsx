@@ -14,7 +14,20 @@ const NAV_ITEMS: ReadonlyArray<{ key: PageKey; label: string; icon: string }> = 
   { key: 'settings', label: '设置', icon: '⚙️' }
 ]
 
-const PAGES: Record<PageKey, () => JSX.Element> = {
+/**
+ * 页面组件。
+ *
+ * `active` 表示「这一页现在是不是当前显示的那一页」。因为四个页面是常驻挂载的
+ * （见下方注释），组件只有在挂载时才会拉一次数据 —— 如果用户在设置页新建了分类，
+ * 记账页看不到，会以为软件把数据弄丢了（大类只能在设置页创建，这是常规操作）。
+ * 所以把 active 传下去，让各页在「被切到」时重新拉数据。
+ *
+ * 不声明 active 参数的页面（列表/统计/设置）不必改：参数更少的函数
+ * 可以赋值给参数更多的类型。
+ */
+type PageComponent = (props: { active: boolean }) => JSX.Element
+
+const PAGES: Record<PageKey, PageComponent> = {
   add: AddPage,
   list: ListPage,
   stats: StatsPage,
@@ -64,7 +77,7 @@ export default function App(): JSX.Element {
 
           return (
             <div key={item.key} hidden={current !== item.key}>
-              <Page />
+              <Page active={current === item.key} />
             </div>
           )
         })}

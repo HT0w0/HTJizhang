@@ -131,6 +131,10 @@ async function launch() {
 async function main() {
   console.log('\n【第 3 阶段 记一笔 — 界面客观验证】\n')
 
+  // 在主进程里取一次「今天」，后面多处要用同一个值。
+  // 必须声明在 try 外面 —— 关掉应用后读数据库那一段还要用它。
+  let today = ''
+
   let session = await launch()
   let { cdp } = session
 
@@ -427,12 +431,231 @@ async function main() {
     await cdp.evaluate(`window.__T.click(window.__T.one('save'))`)
     await sleep(400)
     const noteKept = await cdp.evaluate(`window.__T.one('note').value`)
-    check('保存没成功时，已填的备注不会丢', noteKept === '这段备注不能丢', `「${noteKept}」`)
+    check('保存没成功时（金额为空），已填的备注不会丢', noteKept === '这段备注不能丢', `「${noteKept}」`)
+
+    // ---------- 16. 保存按钮禁用时必须说清「还差什么」 ----------
+    const hintNoAmount = await cdp.evaluate(`window.__T.label(window.__T.one('save-hint'))`)
+    check('金额为空时，按钮下方说清「还差一步：请输入金额」', hintNoAmount.indexOf('请输入金额') >= 0, hintNoAmount)
+
+    // 先把分类清掉：切到「收入」再切回「支出」，切收支会清空已选分类
+    await cdp.evaluate(`window.__T.click(window.__T.one('kind-income'))`)
+    await sleep(400)
+    await cdp.evaluate(`window.__T.click(window.__T.one('kind-expense'))`)
+    await sleep(400)
+
+    await cdp.evaluate(`window.__T.setInput(window.__T.one('amount'), '50')`)
+    await sleep(300)
+    const hintNoCategory = await cdp.evaluate(`window.__T.label(window.__T.one('save-hint'))`)
+    check(
+      '金额填了、分类没选时，说清「还差一步：请选择分类」',
+      hintNoCategory.indexOf('请选择分类') >= 0,
+      hintNoCategory
+    )
+
+    // ---------- 17. 真正的写入失败：已填内容必须保住 ----------
+    // 这一条之前是空转的（把金额清空再看备注有没有变 —— 无论错误处理写没写对都会过）。
+    // 改成走真实失败路径：选好分类后，在别处把该分类归档掉，
+    // 再点保存 —— 仓储层会以「所选的分类已被删除」拒绝写入。
+    await cdp.evaluate(`
+      (function () {
+        var m = window.__T.pickMajors().find(function (e) {
+          return window.__T.label(e).indexOf('餐饮') >= 0
+        })
+        m.click()
+      })()
+    `)
+    await sleep(400)
+    const doomedId = await cdp.evaluate(`
+      (function () {
+        var l = window.__T.pickLeaves().find(function (e) {
+          return window.__T.label(e).indexOf('夜宵') >= 0
+        })
+        l.click()
+        return window.__T.idOf(l)
+      })()
+    `)
+    await sleep(400)
+    await cdp.evaluate(`
+      (function () {
+        window.__T.setInput(window.__T.one('amount'), '88.88')
+        window.__T.setInput(window.__T.one('note'), '这笔一定会失败')
+      })()
+    `)
+    await sleep(300)
+
+    // 在后台把该分类归档掉（模拟「在设置页删了它，记账页还没刷新」）
+    await cdp.evaluate(`window.ht.categories.archive(${doomedId})`)
+    await sleep(300)
+
+    await cdp.evaluate(`window.__T.click(window.__T.one('save'))`)
+    await sleep(1300)
+
+    const failErr = await cdp.evaluate(`
+      (function () { var e = window.__T.one('add-error'); return e ? window.__T.label(e) : '（没有提示）' })()
+    `)
+    const failState = await cdp.evaluate(`
+      JSON.stringify({
+        amount: window.__T.one('amount').value,
+        note: window.__T.one('note').value
+      })
+    `)
+    const f = JSON.parse(failState)
+    check('分类在别处被删后保存，给出中文错误提示', failErr.indexOf('分类') >= 0, failErr)
+    check('写入失败时金额没被清空', f.amount === '88.88', `「${f.amount}」`)
+    check('写入失败时备注没被清空', f.note === '这笔一定会失败', `「${f.note}」`)
+
+    // 恢复：把夜宵还回来
+    await cdp.evaluate(`window.ht.categories.restore(${doomedId})`)
+    await sleep(300)
+
+    // ---------- 18. 手动改过的日期，保存后要跳回今天 ----------
+    // 用户确认的取舍：日期只保留「今天」。补记一笔旧账后如果日期一直留着，
+    // 后面每一笔都会被静默记到那个旧日期，而那种错当场看不出来。
+    await cdp.evaluate(`window.__T.setInput(window.__T.one('amount'), '')`)
+    await cdp.evaluate(`
+      (function () {
+        var m = window.__T.pickMajors().find(function (e) {
+          return window.__T.label(e).indexOf('居住') >= 0
+        })
+        m.click()
+      })()
+    `)
+    await sleep(450)
+    const rentId = await cdp.evaluate(`
+      (function () {
+        var l = window.__T.pickLeaves().find(function (e) {
+          return window.__T.label(e).indexOf('房租') >= 0
+        })
+        l.click()
+        return window.__T.idOf(l)
+      })()
+    `)
+    await sleep(400)
+
+    today = await cdp.evaluate(`window.ht.transactions.today()`)
+    await cdp.evaluate(`window.__T.setInput(window.__T.one('amount'), '1234.56')`)
+    await sleep(250)
+
+    // 手动把日期改成很久以前
+    await cdp.evaluate(`
+      (function () {
+        var d = window.__T.one('date')
+        window.__T.setInput(d, '2020-01-15')
+        d.dispatchEvent(new Event('change', { bubbles: true }))
+      })()
+    `)
+    await sleep(400)
+    const dateSetBack = await cdp.evaluate(`window.__T.one('date').value`)
+    check('能把日期手动改成过去的某一天', dateSetBack === '2020-01-15', dateSetBack)
+
+    await cdp.evaluate(`window.__T.click(window.__T.one('save'))`)
+    await sleep(1300)
+
+    const dateAfterBackdatedSave = await cdp.evaluate(`window.__T.one('date').value`)
+    check(
+      '补记一笔旧账后，日期自动跳回今天（不会把旧日期带到后面每一笔）',
+      dateAfterBackdatedSave === today,
+      `保存后日期是 ${dateAfterBackdatedSave}，今天是 ${today}`
+    )
+
+    // 再记一笔今天的，确认落在今天
+    await cdp.evaluate(`
+      (function () {
+        var m = window.__T.pickMajors().find(function (e) {
+          return window.__T.label(e).indexOf('餐饮') >= 0
+        })
+        m.click()
+      })()
+    `)
+    await sleep(450)
+    await cdp.evaluate(`
+      (function () {
+        var l = window.__T.pickLeaves().find(function (e) {
+          return window.__T.label(e).indexOf('早餐') >= 0
+        })
+        l.click()
+      })()
+    `)
+    await sleep(400)
+    await cdp.evaluate(`window.__T.setInput(window.__T.one('amount'), '9.9')`)
+    await sleep(250)
+    await cdp.evaluate(`window.__T.click(window.__T.one('save'))`)
+    await sleep(1300)
+
+    // ---------- 19. 在设置页新建的大类，切回记账页要能看到 ----------
+    // 复核发现的严重问题：四个页面常驻挂载，只在挂载时拉一次数据的话，
+    // 设置页新建的分类在记账页根本看不到 —— 而大类只能从设置页创建。
+    await cdp.evaluate(`
+      (function () {
+        var btns = Array.prototype.slice.call(document.querySelectorAll('nav button'))
+        var t = btns.find(function (b) { return window.__T.norm(b.innerText).indexOf('设置') >= 0 })
+        t.click()
+      })()
+    `)
+    await sleep(600)
+    await cdp.evaluate(`
+      (function () {
+        window.__T.setInput(window.__T.one('new-major-name'), '宠物')
+        window.__T.one('new-major-add').click()
+      })()
+    `)
+    await sleep(1200)
+
+    await cdp.evaluate(`
+      (function () {
+        var btns = Array.prototype.slice.call(document.querySelectorAll('nav button'))
+        var t = btns.find(function (b) { return window.__T.norm(b.innerText).indexOf('记一笔') >= 0 })
+        t.click()
+      })()
+    `)
+    await sleep(1000)
+    const seesNewMajor = await cdp.evaluate(`
+      JSON.stringify(window.__T.pickMajors().map(function (e) { return window.__T.label(e) }))
+    `)
+    check(
+      '在设置页新建的「宠物」大类，切回记账页立刻能看到（不用重启软件）',
+      seesNewMajor.indexOf('宠物') >= 0,
+      seesNewMajor
+    )
+
+    // ---------- 20. 记账页自己的错误提示与设置页的不会互相干扰 ----------
+    const crossPageOk = await cdp.evaluate(`
+      (function () {
+        var addErr = document.querySelectorAll('[data-testid="add-error"]').length
+        var settingsErr = document.querySelectorAll('[data-testid="error-banner"]').length
+        return JSON.stringify({ addErr: addErr, settingsErr: settingsErr })
+      })()
+    `)
+    check('记账页与设置页的错误条标识不再重名', JSON.parse(crossPageOk).addErr <= 1, crossPageOk)
 
     session.ws.close()
   } finally {
     session.child.kill()
-    await sleep(1200)
+    await sleep(1500)
+  }
+
+  // ---------- 21. 直接读数据库文件，确认日期真的按预期存了 ----------
+  {
+    const { DatabaseSync } = await import('node:sqlite')
+    const db = new DatabaseSync(join(USER_DATA, 'ht-jizhang.db'), { readOnly: true })
+    const rows = db
+      .prepare('SELECT occurred_on, amount_fen FROM transactions ORDER BY id')
+      .all()
+    db.close()
+
+    const byAmount = new Map(rows.map((r) => [r.amount_fen, r.occurred_on]))
+    check(
+      '补记的那笔（1234.56 元）存的是手动选的 2020-01-15',
+      byAmount.get(123456) === '2020-01-15',
+      `实际存的是 ${byAmount.get(123456)}`
+    )
+    check(
+      '紧接着记的那笔（9.9 元）存的是今天，没有被上一笔的旧日期带跑',
+      byAmount.get(990) === today,
+      `实际存的是 ${byAmount.get(990)}，今天是 ${today}`
+    )
+    const allLocalDateFormat = rows.every((r) => /^\d{4}-\d{2}-\d{2}$/.test(r.occurred_on))
+    check('所有日期都是 YYYY-MM-DD 的本地日期串，没有时间戳混进来', allLocalDateFormat)
   }
 
   // ---------- 16. 重开软件，数据还在（真的落库了） ----------
@@ -444,7 +667,11 @@ async function main() {
     const rows = Object.entries(usageAfterRestart)
       .map(([id, n]) => `${id}:${n}`)
       .join(' ')
-    check('重开软件后，刚才记 3 笔还在（真的落库了，不是只存在内存里）', total === 3, `共 ${total} 笔 —— ${rows}`)
+    check(
+      '重开软件后，刚才记的 5 笔还在（真的落库了，不是只存在内存里）',
+      total === 5,
+      `共 ${total} 笔 —— ${rows}`
+    )
   } finally {
     session.ws.close()
     session.child.kill()
