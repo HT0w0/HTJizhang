@@ -17,3 +17,9 @@ export const CATEGORY_CHANNELS = {
   restore: 'categories:restore',
   restoreBuiltins: 'categories:restoreBuiltins'
 } as const
+
+export const TRANSACTION_CHANNELS = {
+  create: 'transactions:create',
+  recentCategoryIds: 'transactions:recentCategoryIds',
+  today: 'transactions:today'
+} as const

@@ -18,8 +18,12 @@ import type {
   CategoryKind,
   CategoryNode,
   CreateCategoryInput,
-  IpcResult
+  CreateTransactionInput,
+  IpcResult,
+  Transaction
 } from '@shared/types'
+import { todayLocal } from '@shared/localDate'
+import { createTransaction, recentCategoryIds } from './db/transactions'
 import {
   archiveCategory,
   createCategory,
@@ -101,4 +105,26 @@ export function categoryHandlers(db: DatabaseSync): CategoryHandlers {
   }
 }
 
-export { CATEGORY_CHANNELS } from '@shared/ipcChannels'
+export { CATEGORY_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+
+export interface TransactionHandlers {
+  create(input: CreateTransactionInput): Promise<IpcResult<Transaction>>
+  recentCategoryIds(): Promise<IpcResult<number[]>>
+  today(): Promise<IpcResult<string>>
+}
+
+/**
+ * 账单的 IPC 处理器。
+ *
+ * 与分类处理器一样，全部返回 IpcResult 而不是抛异常 ——
+ * ipcMain.handle 抛出后渲染进程拿到的消息会被包上英文前缀。
+ */
+export function transactionHandlers(db: DatabaseSync): TransactionHandlers {
+  return {
+    create: async (input) => guard(() => createTransaction(db, input)),
+    recentCategoryIds: async () => guard(() => recentCategoryIds(db)),
+    // 「今天」由主进程算，界面不自己算 —— 界面里算容易误用 UTC（CLAUDE.md §5.2），
+    // 而这里与记账数据用的是同一套日期口径。
+    today: async () => guard(() => todayLocal())
+  }
+}

@@ -1,6 +1,12 @@
 import { contextBridge, ipcRenderer } from 'electron'
-import type { CategoryKind, CreateCategoryInput, HtApi, IpcResult } from '@shared/types'
-import { CATEGORY_CHANNELS } from '@shared/ipcChannels'
+import type {
+  CategoryKind,
+  CreateCategoryInput,
+  CreateTransactionInput,
+  HtApi,
+  IpcResult
+} from '@shared/types'
+import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
 /**
  * 把一个 IPC 调用包成「失败就抛干净中文错误」的形式。
@@ -34,6 +40,11 @@ const api: HtApi = {
     archive: (id: number) => call(CATEGORY_CHANNELS.archive, id),
     restore: (id: number) => call(CATEGORY_CHANNELS.restore, id),
     restoreBuiltins: () => call(CATEGORY_CHANNELS.restoreBuiltins)
+  },
+  transactions: {
+    create: (input: CreateTransactionInput) => call(TRANSACTION_CHANNELS.create, input),
+    recentCategoryIds: () => call(TRANSACTION_CHANNELS.recentCategoryIds),
+    today: () => call(TRANSACTION_CHANNELS.today)
   }
 }
 
