@@ -1,0 +1,40 @@
+@import 'tailwindcss';
+
+/* 让滚动条、输入框等系统原生控件也跟随系统明暗模式 */
+:root {
+  color-scheme: light dark;
+  background-color: #ffffff;
+}
+
+/* 深色模式下先给根节点铺底色，避免启动瞬间闪一下白屏 */
+@media (prefers-color-scheme: dark) {
+  :root {
+    background-color: #0f172a;
+  }
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  /* 中文字体优先级：Windows 用微软雅黑，macOS 用苹方 */
+  font-family:
+    system-ui,
+    -apple-system,
+    'Segoe UI',
+    'Microsoft YaHei',
+    'PingFang SC',
+    'Hiragino Sans GB',
+    'Source Han Sans SC',
+    sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* 数字统一用等宽字形，账单列表里金额才能对齐 */
+.tabular {
+  font-variant-numeric: tabular-nums;
+}

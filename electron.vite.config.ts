@@ -1,6 +1,7 @@
 import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
+import tailwindcss from '@tailwindcss/vite'
 
 const sharedAlias = { '@shared': resolve('src/shared') }
 
@@ -15,6 +16,6 @@ export default defineConfig({
   },
   renderer: {
     resolve: { alias: sharedAlias },
-    plugins: [react()]
+    plugins: [react(), tailwindcss()]
   }
 })
