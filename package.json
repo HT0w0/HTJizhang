@@ -15,7 +15,8 @@
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "check:bat": "node scripts/verify/检查批处理文件行尾.mjs"
   },
   "dependencies": {
     "react": "^19.3.0",

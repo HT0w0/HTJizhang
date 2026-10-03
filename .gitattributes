@@ -1,0 +1,32 @@
+# 让 git 自己保证文件的行尾格式，不依赖「记得手动改」。
+
+# Windows 批处理文件必须是 CRLF。
+# 用 LF 保存时 cmd.exe 会把每行开头的字符当成上一行的行尾吃掉
+# （echo 变成 ho、%ERRORLEVEL% 变成 ERRORLEVEL:），整个脚本静默失效：
+# 不报错、不提示，双击后什么都不发生。
+# 2026-10-03 实际踩过：启动HT记账.bat 因此打不开软件。
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# 其余文本文件统一 LF，避免不同系统上协作时反复出现「整文件都被改动」的假差异。
+*.ts   text eol=lf
+*.tsx  text eol=lf
+*.js   text eol=lf
+*.mjs  text eol=lf
+*.json text eol=lf
+*.md   text eol=lf
+*.css  text eol=lf
+*.html text eol=lf
+*.yml  text eol=lf
+*.yaml text eol=lf
+
+# 二进制文件不要被当成文本处理。
+*.png  binary
+*.jpg  binary
+*.jpeg binary
+*.gif  binary
+*.ico  binary
+*.icns binary
+*.exe  binary
+*.dll  binary
+*.db   binary
