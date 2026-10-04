@@ -33,6 +33,22 @@ export interface Transaction {
   readonly updatedAt: string
 }
 
+/**
+ * 账单列表里的一行：账单本身 + 它的分类信息。
+ *
+ * 为什么要把分类名一起带出来：列表每行都要显示「午餐」和它所属的「餐饮」，
+ * 如果只给 categoryId，界面就得自己拿分类树去查 —— 61 个小类逐个 find 一遍，
+ * 而且分类改名后列表里的旧行会跟着变，反而绕。数据库一次 JOIN 出来最省事。
+ */
+export interface TransactionListItem extends Transaction {
+  /** 二级小类名，如「午餐」 */
+  readonly categoryName: string
+  /** 所属一级大类名，如「餐饮」 */
+  readonly majorName: string
+  /** 所属一级大类图标 */
+  readonly majorIcon: string
+}
+
 export interface CreateTransactionInput {
   readonly kind: CategoryKind
   readonly amountFen: number
