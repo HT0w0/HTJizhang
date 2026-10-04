@@ -65,7 +65,8 @@ const api: HtApi = {
     exportCsv: (month: string | null) => call(BACKUP_CHANNELS.exportCsv, month),
     openDataFolder: () => call(BACKUP_CHANNELS.openDataFolder),
     pickRestoreFile: () => call(BACKUP_CHANNELS.pickRestoreFile),
-    restore: (path: string) => call(BACKUP_CHANNELS.restore, path)
+    restore: (path: string, autoBackupName: string) =>
+      call(BACKUP_CHANNELS.restore, path, autoBackupName)
   }
 }
 

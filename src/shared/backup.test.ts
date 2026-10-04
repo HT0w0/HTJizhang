@@ -1,5 +1,11 @@
 import { test, expect } from 'vitest'
-import { autoBackupFileName, backupFileName, backupStamp, buildRestoreWarning } from './backup'
+import {
+  autoBackupFileName,
+  backupFileName,
+  backupStamp,
+  buildRestoreWarning,
+  isAutoBackupFileName
+} from './backup'
 
 // ---------------------------------------------------------------------------
 // 文件名
@@ -73,4 +79,26 @@ test('当前账本是空的、但备份不是空的时，不加「账本会变�
   const text = buildRestoreWarning({ ...base, currentCount: 0 })
   expect(text).not.toContain('变空')
   expect(text).toContain('130')
+})
+
+// ---------------------------------------------------------------------------
+// 自动备份文件名这道关
+//
+// 恢复时这个名字要**从界面传回主进程**（确认框里显示的那个，必须就是最后真正
+// 写盘的那个 —— 否则用户照提示去数据文件夹里找会找不到）。而主进程拿到一个
+// 界面给的字符串就往数据目录里拼路径，得先确认它确实是「我们自己产出的那种名字」。
+// ---------------------------------------------------------------------------
+
+test('认得出自己产出的自动备份文件名', () => {
+  expect(isAutoBackupFileName(autoBackupFileName(backupStamp(new Date())))).toBe(true)
+  expect(isAutoBackupFileName('HT记账-导入前自动备份-2026-10-04-173930.db')).toBe(true)
+})
+
+test('不认路径、不认别的文件名（主进程不能拿界面给的字符串随便往数据目录里拼）', () => {
+  expect(isAutoBackupFileName('..\\..\\别的地方.db')).toBe(false)
+  expect(isAutoBackupFileName('../../etc/passwd')).toBe(false)
+  expect(isAutoBackupFileName('C:\\Windows\\System32\\x.db')).toBe(false)
+  expect(isAutoBackupFileName('HT记账-导入前自动备份-2026-10-04.db')).toBe(false)
+  expect(isAutoBackupFileName('HT记账-导入前自动备份-2026-10-04-173930.db.exe')).toBe(false)
+  expect(isAutoBackupFileName('')).toBe(false)
 })

@@ -219,8 +219,15 @@ export interface BackupApi {
   openDataFolder(): Promise<void>
   /** 弹选择框并检查选中的文件。用户取消时返回 null。不改动任何数据。 */
   pickRestoreFile(): Promise<RestorePreview | null>
-  /** 用备份替换当前账本。**不可逆**，界面上必须先弹确认框。 */
-  restore(path: string): Promise<RestoreOutcome>
+  /**
+   * 用备份替换当前账本。**不可逆**，界面上必须先弹确认框。
+   *
+   * `autoBackupName` 就是确认框里给用户看过的那个名字（来自 RestorePreview），
+   * 必须原样传回来：主进程要用它当「替换前自动另存」的文件名，
+   * 而**确认框里显示的名字必须就是最后真正写盘的那个** ——
+   * 否则用户照着提示去数据文件夹里找，会找不到。
+   */
+  restore(path: string, autoBackupName: string): Promise<RestoreOutcome>
 }
 
 // ---------------------------------------------------------------------------

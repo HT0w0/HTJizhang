@@ -23,7 +23,18 @@ import { seedBuiltinCategories } from './seed'
  */
 export function initDatabaseIn(userDataDir: string): DatabaseSync {
   mkdirSync(userDataDir, { recursive: true })
-  const db = openDatabase(defaultDatabasePath(userDataDir))
+  return initDatabaseAt(defaultDatabasePath(userDataDir))
+}
+
+/**
+ * 同上，但直接指定数据库文件路径。
+ *
+ * 恢复备份时要先拿一份**临时副本**试一遍「打开 → 迁移 → 播种」（见 db/backup.ts）：
+ * 光看表名根本认不出「长得像备份、其实结构不是我们的」文件，只有真的迁移一次
+ * 才知道行不行。而那个副本不在数据目录里，得能按路径打开。
+ */
+export function initDatabaseAt(dbPath: string): DatabaseSync {
+  const db = openDatabase(dbPath)
   try {
     migrate(db)
     seedBuiltinCategories(db)

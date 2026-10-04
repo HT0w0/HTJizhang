@@ -99,6 +99,21 @@ window.__T = {
   count(t) { return document.querySelectorAll('[data-testid="' + t + '"]').length },
   text(t) { var e = this.one(t); return e ? e.textContent : null },
   label(t) { return this.norm(this.text(t)) },
+
+  /**
+   * 元素是不是**真的显示在屏幕上**，而不只是「存在于 DOM 里」。
+   *
+   * 必须有这一条：四个页面常驻挂载，非当前的页面被 hidden 藏着 ——
+   * 而**藏在里面的元素照样有 textContent**。只读文字的话，
+   * 检查会在「用户其实一个字都看不见」的情况下「通过」。
+   * 2026-10-04 独立复核就是在恢复提示上抓到这一点的。
+   */
+  shown(t) {
+    var e = this.one(t)
+    if (!e) return null
+    return e.offsetParent !== null
+  },
+
   click(el) { if (el) el.click() },
   disabled(t) { var e = this.one(t); return e ? !!e.disabled : null },
 
@@ -151,24 +166,49 @@ async function getTarget(port) {
   throw new Error('等了 30 秒也没等到调试接口')
 }
 
+/**
+ * 发消息给一个已经关掉的调试连接时会抛出这句话。
+ * 出现它就说明**检查脚本自己写错了**（用了一个已经 shutdown 的 cdp 会话），
+ * 不是软件有问题 —— 措辞里必须说清这一点，否则下一个看到它的人会去查软件。
+ */
+const CLOSED_HINT =
+  '调试连接已关闭。这个检查用错了 cdp 会话（多半是用了一个已经 shutdown 的 session.cdp）——' +
+  '这是验证脚本自身的缺陷，不是软件的问题。'
+
 class Cdp {
   constructor(ws) {
     this.ws = ws
     this.id = 0
     this.pending = new Map()
+    /** 连接关掉之后置 true。见 send() 里的说明。 */
+    this.closed = false
     ws.addEventListener('message', (e) => {
       const msg = JSON.parse(e.data)
       const p = this.pending.get(msg.id)
       if (p) {
         this.pending.delete(msg.id)
-        p(msg)
+        p.resolve(msg)
       }
+    })
+    ws.addEventListener('close', () => {
+      this.closed = true
+      // 连接关了，还在等回复的那些请求永远等不到了：显式拒掉，
+      // 别让它们的 Promise 悬着（否则整个脚本静默卡死）。
+      for (const p of this.pending.values()) p.reject(new Error(CLOSED_HINT))
+      this.pending.clear()
     })
   }
   send(method, params = {}) {
+    // 2026-10-04 实际踩过：一条检查误用了**已经 shutdown 的 cdp**，
+    // ws.send 把请求发进一个死连接，回包永远不会来，Promise 永不返回 ——
+    // 脚本既不报错也不打印结果汇总，就那样静默挂着（现象是「进程还在、日志不动」）。
+    // 所以这里必须显式拒掉：错的是脚本，就该立刻说清楚，而不是假装在等。
+    if (this.closed || this.ws.readyState !== 1) {
+      return Promise.reject(new Error(CLOSED_HINT))
+    }
     const id = ++this.id
-    return new Promise((resolve) => {
-      this.pending.set(id, resolve)
+    return new Promise((resolve, reject) => {
+      this.pending.set(id, { resolve, reject })
       this.ws.send(JSON.stringify({ id, method, params }))
     })
   }
@@ -541,14 +581,44 @@ async function main() {
     await sleep(2600)
     await cdp2.evaluate(HELPERS)
 
-    const notice = await cdp2.evaluate(`window.__T.text('backup-notice')`)
+    const afterRestore = await cdp2.json(`({
+      当前页: window.__T.norm(
+        (document.querySelector('nav button.bg-blue-600') || {}).innerText || ''
+      ),
+      提示文字: window.__T.text('backup-notice'),
+      提示可见: window.__T.shown('backup-notice'),
+      哨兵_记账页金额框可见: window.__T.shown('amount')
+    })`)
+
     check(
       '替换之后界面重新载入，并显示「已从…恢复，账本现在是 N 笔」',
-      typeof notice === 'string' &&
-        notice.includes('已从') &&
-        notice.includes('恢复') &&
-        notice.includes('2 笔'),
-      String(notice)
+      typeof afterRestore.提示文字 === 'string' &&
+        afterRestore.提示文字.includes('已从') &&
+        afterRestore.提示文字.includes('恢复') &&
+        afterRestore.提示文字.includes('2 笔'),
+      String(afterRestore.提示文字)
+    )
+
+    // ⚠️ 上面那条**只读了文字**，而藏在被 hidden 的设置页里的元素照样有文字。
+    // 2026-10-04 独立复核实测：提示确实生成了、也确实写进了 DOM，
+    // 但重载后界面落在「记一笔」页，用户一个字都看不见 —— 而这条检查一直「通过」。
+    // 下面两条才是「用户到底看见没有」。
+    check(
+      '这句提示**真的显示在屏幕上**（不是只存在于被隐藏的设置页里）',
+      afterRestore.提示可见 === true,
+      `可见=${afterRestore.提示可见}，文字=${String(afterRestore.提示文字).slice(0, 30)}`
+    )
+    check(
+      '重载之后停在设置页（否则界面跳回「记一笔」，用户看着提示消失却不知道为什么）',
+      afterRestore.当前页.includes('设置'),
+      afterRestore.当前页
+    )
+    // 防空转哨兵：证明 shown() 真的分得清「显示」和「藏着」，
+    // 而不是不管问什么都回 true（那样上面那条就白测了）。
+    check(
+      '哨兵：此刻记账页的金额框是隐藏的（证明「可见性」这条检查不是空转）',
+      afterRestore.哨兵_记账页金额框可见 === false,
+      String(afterRestore.哨兵_记账页金额框可见)
     )
 
     await goto(cdp2, '账单')
@@ -624,8 +694,73 @@ async function main() {
     )
     check('选错文件之后账本一个字节都没动', (await txCount(cdp3)) === 2, `${await txCount(cdp3)} 笔`)
 
+    // -----------------------------------------------------------------
+    // 第四程：一个「长得像备份」的外来库
+    //
+    // 2026-10-04 独立复核抓到的最严重的一条。造一个库：表名对得上、
+    // `user_version` 是 0（任何别的软件导出的库都可能长这样），但结构不是我们的。
+    // 旧实现里它**骗得过体检**，一路走到「把账本文件换掉」，之后迁移才报
+    // 「table categories already exists」—— 此时账本已经是那个外来库了，
+    // **用户关掉软件就再也打不开**。产品设计文档 §3.5 承诺「选错文件不会有事」。
+    // -----------------------------------------------------------------
+    const foreignFile = join(SAVE_DIR, '别家软件的库.db')
+    {
+      const db = new DatabaseSync(foreignFile)
+      db.exec('CREATE TABLE transactions (id INTEGER PRIMARY KEY, occurred_on TEXT)')
+      db.exec('CREATE TABLE categories (id INTEGER PRIMARY KEY, label TEXT)')
+      db.close()
+    }
+
+    await shutdown(session)
+    session = await launch({ HT_TEST_SAVE_DIR: SAVE_DIR, HT_TEST_OPEN_PATH: foreignFile })
+    const cdp4 = session.cdp
+    await goto(cdp4, '设置')
+
+    await cdp4.evaluate(`window.__T.click(window.__T.one('restore-pick'))`)
+    const foreignShown = await waitFor(cdp4, `window.__T.count('backup-error') === 1`, 6000)
+    const foreignText = await cdp4.evaluate(`window.__T.text('backup-error')`)
+    check(
+      '「表名对得上、结构不是我们的」外来库：给中文说明，不漏英文的 already exists / no such column',
+      foreignShown &&
+        typeof foreignText === 'string' &&
+        /[一-鿿]/.test(foreignText) &&
+        foreignText.includes('备份') &&
+        !foreignText.includes('already exists') &&
+        !foreignText.includes('no such column'),
+      String(foreignText)
+    )
+    check(
+      '这种文件**不弹**确认框（弹了就等于准备拿它替换账本，换完软件就起不来了）',
+      (await cdp4.evaluate(`window.__T.count('confirm-dialog')`)) === 0
+    )
+    check(
+      '被它拒绝之后账本还能读、还是 2 笔',
+      (await txCount(cdp4)) === 2,
+      `${await txCount(cdp4)} 笔`
+    )
+
+    // 最关键的一条：**重开软件还能进得去**。旧实现恰恰死在这里 ——
+    // 账本文件已经被换成外来库，启动时迁移报错，只弹一个「启动失败」，界面出不来。
+    await shutdown(session)
+    session = null
+    let restartOk = false
+    try {
+      session = await launch({ HT_TEST_SAVE_DIR: SAVE_DIR, HT_TEST_OPEN_PATH: '__cancel__' })
+      restartOk = (await txCount(session.cdp)) === 2
+    } catch {
+      restartOk = false
+    }
+    check(
+      '重开软件能正常进入界面、账本还是 2 笔（这一条就是「用户会不会再也打不开账本」）',
+      restartOk
+    )
+
     // ---------- 标识唯一性 ----------
-    const dups = await cdp3.json(`window.__T.duplicatedTestIds()`)
+    // 这一条必须挂在**当下还活着**的那一程上。2026-10-04 踩过：它原先用 cdp3，
+    // 而 cdp3 在第四程开头就已经 shutdown 了 —— 请求发进一个死连接，
+    // Promise 永不返回，整个脚本静默卡死、连结果汇总都打不出来。
+    // （现在那种情况会抛「调试连接已关闭」，见上面的 CLOSED_HINT。）
+    const dups = await session.cdp.json(`window.__T.duplicatedTestIds()`)
     check(
       '整个页面上没有任何重复的 data-testid（四个页面常驻挂载，重名是最难查的一类错）',
       dups.length === 0,
@@ -633,8 +768,17 @@ async function main() {
     )
   } finally {
     if (session) await shutdown(session)
+    summarize()
   }
+}
 
+/**
+ * 打印结果汇总。
+ *
+ * 放在 finally 里调用：中途抛错时也得把**已经跑完的项**打出来，
+ * 否则「脚本自己出错了、一项结果都没打印」和「一项都没跑」在屏幕上看不出区别。
+ */
+function summarize() {
   const failed = results.filter((r) => !r.pass)
   console.log(`\n结果：${results.length - failed.length}/${results.length} 项通过`)
   if (failed.length > 0) {

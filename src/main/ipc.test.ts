@@ -1,11 +1,12 @@
 import { test, expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { migrate } from './db/migrations'
 import { seedBuiltinCategories } from './db/seed'
 import { initDatabaseIn } from './db'
+import { defaultDatabasePath } from './db/connection'
 import { inspectBackupFile } from './db/backup'
 import {
   backupHandlers,
@@ -678,9 +679,12 @@ test('恢复之后主进程手里必须是**新**连接（守着旧连接的症�
   addTx(target.db, '2026-10-01', 300, '十月')
   const oldDb = target.db
 
-  // 恢复和分类走的是**同一个** holder，就是线上 ipc-register.ts 的样子
+  // 恢复和分类走的是**同一个** holder，就是线上 ipc-register.ts 的样子。
+  // 走「先预览、再带着预览里的名字去恢复」这条**完整**流程 —— 界面就是这么用的。
   const b = backupHandlers(ctxFor(target, { pickBackupPath: async () => backupPath }))
-  const restored = await b.restore(backupPath)
+  const preview = await b.pickRestoreFile()
+  if (!preview.ok || preview.value === null) throw new Error('预览没成功，后面测的就不是恢复了')
+  const restored = await b.restore(preview.value.path, preview.value.autoBackupFileName)
 
   expect(restored.ok).toBe(true)
   if (restored.ok) expect(restored.value.count).toBe(2)
@@ -703,6 +707,87 @@ test('恢复之后主进程手里必须是**新**连接（守着旧连接的症�
   if (months.ok) expect(months.value).toEqual(['2026-09', '2026-08'])
 
   target.db.close()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('确认框里写的自动备份名，就是磁盘上真正出现的那个（差一秒用户就找不到）', async () => {
+  // 2026-10-04 独立复核实测：确认框里显示 …173930，磁盘上是 …173931 ——
+  // 原因是在「预览」和「恢复」两处各取了一次当前时间，中间隔着用户读警告、
+  // 点「替换」的那一两秒。用户照着提示去数据文件夹里找，会找不到。
+  const srcDir = tempDir()
+  const dir = tempDir()
+  const backupDir = tempDir()
+  const source: Holder = { db: initDatabaseIn(srcDir), userDataDir: srcDir }
+  addTx(source.db, '2026-08-01', 100, '八月')
+  const backupPath = join(backupDir, 'HT记账-备份.db')
+  await backupHandlers(ctxFor(source, { pickSavePath: async () => backupPath })).exportDatabase()
+  source.db.close()
+  rmSync(srcDir, { recursive: true, force: true })
+
+  const target: Holder = { db: initDatabaseIn(dir), userDataDir: dir }
+  addTx(target.db, '2026-10-01', 300, '十月')
+
+  const b = backupHandlers(ctxFor(target, { pickBackupPath: async () => backupPath }))
+  const preview = await b.pickRestoreFile()
+  if (!preview.ok || preview.value === null) throw new Error('预览没成功')
+  const promised = preview.value.autoBackupFileName
+
+  const restored = await b.restore(preview.value.path, promised)
+  expect(restored.ok).toBe(true)
+
+  // 用户照着确认框里的名字去数据文件夹找，必须找得到，名字一个字都不差。
+  expect(existsSync(join(dir, promised))).toBe(true)
+
+  target.db.close()
+  rmSync(dir, { recursive: true, force: true })
+  rmSync(backupDir, { recursive: true, force: true })
+})
+
+test('恢复请求里的自动备份名不合法时直接中止（主进程不拿界面给的字符串随便拼路径）', async () => {
+  const dir = tempDir()
+  const holder: Holder = { db: initDatabaseIn(dir), userDataDir: dir }
+  addTx(holder.db, '2026-10-01', 300, '十月')
+
+  const b = backupHandlers(ctxFor(holder, { pickBackupPath: async () => '用不到' }))
+  // 这个名字会被拼进数据目录；带 .. 的必须被挡住，不能写到别的地方去。
+  const result = await b.restore('用不到', '..\\..\\别的地方.db')
+
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.message).toMatch(/[一-鿿]/)
+    expect(result.message).not.toContain('Error invoking remote method')
+  }
+  // 一步都没往下走：连接还开着、账本还能读。
+  expect(countIn(holder.db)).toBe(1)
+
+  holder.db.close()
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('导出的目标指到账本自己身上时拒绝，账本一个字节都没少', async () => {
+  // 「另存为」对话框的默认目录就是数据目录，用户把文件名打成 ht-jizhang.db
+  // 就指到账本自己身上了。exportDatabaseTo 的第一步是 rmSync ——
+  // Windows 上删一个打开中的文件会失败（无损害），macOS 上会真的把它删掉。
+  const dir = tempDir()
+  const holder: Holder = { db: initDatabaseIn(dir), userDataDir: dir }
+  addTx(holder.db, '2026-10-01', 1500, '午饭')
+
+  const b = backupHandlers(
+    ctxFor(holder, { pickSavePath: async () => defaultDatabasePath(dir) })
+  )
+
+  const dbResult = await b.exportDatabase()
+  expect(dbResult.ok).toBe(false)
+  if (!dbResult.ok) expect(dbResult.message).toMatch(/[一-鿿]/)
+
+  const csvResult = await b.exportCsv(null)
+  expect(csvResult.ok).toBe(false)
+
+  // 账本文件还在、还能读。
+  expect(existsSync(defaultDatabasePath(dir))).toBe(true)
+  expect(countIn(holder.db)).toBe(1)
+
+  holder.db.close()
   rmSync(dir, { recursive: true, force: true })
 })
 

@@ -33,9 +33,15 @@ import type {
   UpdateTransactionInput
 } from '@shared/types'
 import { todayLocal } from '@shared/localDate'
-import { autoBackupFileName, backupFileName, backupStamp } from '@shared/backup'
+import {
+  autoBackupFileName,
+  backupFileName,
+  backupStamp,
+  isAutoBackupFileName
+} from '@shared/backup'
 import { csvFileName } from '@shared/csv'
 import {
+  assertNotLiveLedger,
   exportDatabaseTo,
   inspectBackupFile,
   restoreFromBackup,
@@ -250,7 +256,13 @@ export interface BackupHandlers {
   openDataFolder(): Promise<IpcResult<void>>
   /** 弹选择框 + 检查文件。用户取消时 preview 为 null。这一步不动任何数据。 */
   pickRestoreFile(): Promise<IpcResult<RestorePreview | null>>
-  restore(path: string): Promise<IpcResult<RestoreOutcome>>
+  /**
+   * 用备份替换当前账本。**不可逆**，界面上必须先弹确认框。
+   *
+   * `autoBackupName` 是确认框里给用户看过的那个名字，要原样传回来 ——
+   * 不能在这里重新取一次时间（见 pickRestoreFile 里的说明）。
+   */
+  restore(path: string, autoBackupName: string): Promise<IpcResult<RestoreOutcome>>
 }
 
 /** 从文件名里取出「叫什么」，用于界面显示。 */
@@ -273,6 +285,9 @@ export function backupHandlers(ctx: BackupContext): BackupHandlers {
       guardAsync(async () => {
         const path = await ctx.pickSavePath(backupFileName(ctx.today()))
         if (path === null) return { cancelled: true, path: '' }
+        // 保存框的**默认目录就是数据目录**，用户把文件名打成 ht-jizhang.db
+        // 就指到账本自己身上了。macOS 上那会真的把账本删掉，见 assertNotLiveLedger。
+        assertNotLiveLedger(path, ctx.userDataDir)
         exportDatabaseTo(ctx.getDb(), path)
         return { cancelled: false, path }
       }),
@@ -281,6 +296,8 @@ export function backupHandlers(ctx: BackupContext): BackupHandlers {
       guardAsync(async () => {
         const path = await ctx.pickSavePath(csvFileName(month, ctx.today()))
         if (path === null) return { cancelled: true, path: '' }
+        // CSV 那边不用 rmSync，但 writeFileSync 同样是整个覆盖掉，一样得拦。
+        assertNotLiveLedger(path, ctx.userDataDir)
         writeCsvFile(ctx.getDb(), month, path)
         return { cancelled: false, path }
       }),
@@ -309,18 +326,29 @@ export function backupHandlers(ctx: BackupContext): BackupHandlers {
           firstDate: info.firstDate,
           lastDate: info.lastDate,
           currentCount,
+          // 名字在这里定下来，一路带到确认框、再带回来。
+          // ⚠️ 不要在 restore 里重新取一次时间：用户读完警告再点「替换」
+          // 至少要一秒，两处各取一次的结果就是**确认框里写的名字和磁盘上的对不上**
+          //（差一秒），用户照着提示去数据文件夹里找会找不到。
+          // 2026-10-04 独立复核实测到过（显示 …173930，实际 …173931）。
           autoBackupFileName: autoBackupFileName(backupStamp(new Date()))
         }
       }),
 
-    restore: async (path) =>
+    restore: async (path, autoBackupName) =>
       guard(() => {
+        // 这个名字接下来要拼进数据目录的路径里，而它是界面传回来的字符串，
+        // 所以先确认它确实是「我们自己产出的那种名字」，不能是 ..\..\别的地方。
+        if (!isAutoBackupFileName(autoBackupName)) {
+          throw new Error('恢复请求里的备份文件名不合法，已中止。请重新选择备份文件。')
+        }
+
         const before = inspectBackupFile(path)
         const next = restoreFromBackup({
           userDataDir: ctx.userDataDir,
           backupPath: path,
           currentDb: ctx.getDb(),
-          autoBackupName: autoBackupFileName(backupStamp(new Date()))
+          autoBackupName
         })
         // 主进程手里那个引用必须跟着换，否则恢复之后所有功能都对着旧连接报错。
         ctx.replaceDatabase(next)

@@ -4,6 +4,7 @@ import AddPage from './pages/AddPage'
 import ListPage from './pages/ListPage'
 import StatsPage from './pages/StatsPage'
 import SettingsPage from './pages/SettingsPage'
+import { ACTIVE_PAGE_KEY } from './sessionKeys'
 
 type PageKey = 'add' | 'list' | 'stats' | 'settings'
 
@@ -13,6 +14,23 @@ const NAV_ITEMS: ReadonlyArray<{ key: PageKey; label: string; icon: string }> = 
   { key: 'stats', label: '统计', icon: '📊' },
   { key: 'settings', label: '设置', icon: '⚙️' }
 ]
+
+const PAGE_KEYS: ReadonlyArray<string> = NAV_ITEMS.map((item) => item.key)
+
+/**
+ * 重载之后该停在哪一页。
+ *
+ * 恢复账本会让界面整页重载（见 components/DataBackup.tsx），而重载会把 state
+ * 全清掉 —— 少了这一下，用户在设置页点完「替换」会被甩回「记一笔」页，
+ * 而那句「已恢复」的提示挂在设置页里，他一个字都看不到。
+ * 2026-10-04 独立复核实测到过：提示的文本在，元素 `offsetParent` 是 null。
+ *
+ * 这个键只在恢复前被写进去。平时读不到，就照旧落在「记一笔」。
+ */
+function initialPage(): PageKey {
+  const stored = sessionStorage.getItem(ACTIVE_PAGE_KEY)
+  return stored !== null && PAGE_KEYS.includes(stored) ? (stored as PageKey) : 'add'
+}
 
 /**
  * 页面组件。
@@ -35,7 +53,7 @@ const PAGES: Record<PageKey, PageComponent> = {
 }
 
 export default function App(): JSX.Element {
-  const [current, setCurrent] = useState<PageKey>('add')
+  const [current, setCurrent] = useState<PageKey>(initialPage)
 
   return (
     <div className="flex h-full bg-white text-slate-800 dark:bg-slate-900 dark:text-slate-100">

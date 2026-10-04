@@ -95,7 +95,10 @@ export function registerIpcHandlers(holder: DatabaseHolder): void {
   ipcMain.handle(BACKUP_CHANNELS.exportCsv, (_event, month: string | null) => b.exportCsv(month))
   ipcMain.handle(BACKUP_CHANNELS.openDataFolder, () => b.openDataFolder())
   ipcMain.handle(BACKUP_CHANNELS.pickRestoreFile, () => b.pickRestoreFile())
-  ipcMain.handle(BACKUP_CHANNELS.restore, (_event, path: string) => b.restore(path))
+  ipcMain.handle(
+    BACKUP_CHANNELS.restore,
+    (_event, path: string, autoBackupName: string) => b.restore(path, autoBackupName)
+  )
 }
 
 /** 上次用户把文件存到了哪里。再做一次同类导出时，保存框从那儿开始。 */

@@ -1,5 +1,5 @@
 import { test, expect } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DatabaseSync } from 'node:sqlite'
@@ -8,6 +8,7 @@ import { defaultDatabasePath } from './connection'
 import { createTransaction } from './transactions'
 import { MIGRATIONS } from './migrations'
 import {
+  assertNotLiveLedger,
   csvText,
   exportDatabaseTo,
   inspectBackupFile,
@@ -362,5 +363,130 @@ test('备份来自更新版本时，账本也原封不动', () => {
 
   disposeDatabaseIn(target.db)
   rmSync(source.dir, { recursive: true, force: true })
+  rmSync(target.dir, { recursive: true, force: true })
+})
+
+// ---------------------------------------------------------------------------
+// 「长得像备份」的文件
+//
+// 独立复核（2026-10-04）在这里抓到一个真问题。造一个库：表名对得上、
+// `user_version` 是 0（任何别的软件导出的库都可能长这样），但结构不是我们的。
+// 旧实现里它**过得去体检**（有 transactions / categories，count 和 occurred_on
+// 也查得动），于是恢复流程会先把账本文件换掉，之后 initDatabaseIn 迁移时才撞上
+// 「table categories already exists」而失败 —— 此时账本文件已经是那个外来库了，
+// **关掉软件就再也打不开**，只能手工去数据目录里把后悔药改名顶替回来。
+// 用户不懂电脑，这一步等于不会。产品设计文档 §3.5 明确承诺「选错文件不会有事」。
+// ---------------------------------------------------------------------------
+
+/**
+ * 造一个「表名对得上、但结构完全不是我们的」库。
+ *
+ * 它是这一组里**最难认**的一种：表名齐、`user_version` 是 0（别的软件导出的库
+ * 都长这样）、`count(*)` 和 `min/max(occurred_on)` 也查得动。只有真的拿它
+ * 「打开 → 迁移」一遍才会现形（migrate 会 CREATE TABLE categories，撞上「已存在」）。
+ */
+function foreignButPlausibleDb(path: string): void {
+  const db = new DatabaseSync(path)
+  db.exec('CREATE TABLE transactions (id INTEGER PRIMARY KEY, occurred_on TEXT)')
+  db.exec('CREATE TABLE categories (id INTEGER PRIMARY KEY, label TEXT)')
+  db.close()
+}
+
+/** 连 occurred_on 都没有的外来库：它连体检都过不去。 */
+function foreignDbWithWrongColumns(path: string): void {
+  const db = new DatabaseSync(path)
+  db.exec('CREATE TABLE transactions (id INTEGER PRIMARY KEY, amount TEXT)')
+  db.exec('CREATE TABLE categories (id INTEGER PRIMARY KEY, label TEXT)')
+  db.close()
+}
+
+test('有两张表但列对不上的文件，体检就说人话（不能漏出英文的 no such column）', () => {
+  const dir = tempDir()
+  const foreign = join(dir, '外来.db')
+  foreignDbWithWrongColumns(foreign)
+
+  expect(() => inspectBackupFile(foreign)).toThrow(/不是 HT记账的备份文件/)
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('长得像备份、其实装不起来的文件：选中的那一刻就被拒绝，账本一个字节都不能动', () => {
+  const target = ledgerWith(2, tempDir())
+  const foreignDir = tempDir()
+  const foreign = join(foreignDir, '外来.db')
+  foreignButPlausibleDb(foreign)
+
+  // 前提先钉住：这类文件在**体检这一步**（也就是用户选完文件的当下）就被拒。
+  // 旧实现是「体检放行、等用户点了『替换』才失败」—— 那样用户会先读到一遍
+  // 「备份里有 0 笔 / 当前有 2 笔」并按下确认，然后才知道这个文件根本用不了，
+  // 等于让他为一个不可能发生的替换白确认一次。这条断言钉住的就是「拦在选文件那一步」。
+  expect(() => inspectBackupFile(foreign)).toThrow(/不是 HT记账的备份文件/)
+
+  expect(() =>
+    restoreFromBackup({
+      userDataDir: target.dir,
+      backupPath: foreign,
+      currentDb: target.db,
+      autoBackupName: '自动备份.db'
+    })
+  ).toThrow(/不是 HT记账的备份文件/)
+
+  // 连接还开着、数据还在 —— 失败必须停在动数据之前。
+  expect(countOf(target.db)).toBe(2)
+  disposeDatabaseIn(target.db)
+
+  // 而且重开之后账本能正常用。旧实现恰恰死在下一步：关掉软件就再也打不开。
+  const reopened = initDatabaseIn(target.dir)
+  expect(countOf(reopened)).toBe(2)
+  disposeDatabaseIn(reopened)
+
+  rmSync(target.dir, { recursive: true, force: true })
+  rmSync(foreignDir, { recursive: true, force: true })
+})
+
+test('体检没过时，数据目录里不留任何残渣（下次恢复不能被上一次的临时文件影响）', () => {
+  const target = ledgerWith(2, tempDir())
+  const foreignDir = tempDir()
+  const foreign = join(foreignDir, '外来.db')
+  foreignButPlausibleDb(foreign)
+
+  expect(() =>
+    restoreFromBackup({
+      userDataDir: target.dir,
+      backupPath: foreign,
+      currentDb: target.db,
+      autoBackupName: '自动备份.db'
+    })
+  ).toThrow()
+
+  disposeDatabaseIn(target.db)
+  // 只剩账本自己。既不该留临时文件，也不该白写一份后悔药。
+  expect(readdirSync(target.dir)).toEqual([defaultDatabasePath(target.dir).split(/[\\/]/).pop()])
+
+  rmSync(target.dir, { recursive: true, force: true })
+  rmSync(foreignDir, { recursive: true, force: true })
+})
+
+// ---------------------------------------------------------------------------
+// 导出时不许往「正在使用的账本」上写
+//
+// exportDatabaseTo 的第一步是 rmSync(destPath)。而「另存为」对话框的**默认目录
+// 就是数据目录**（见 src/main/ipc-register.ts），用户只要把文件名打成
+// ht-jizhang.db 就会指向账本自己。
+// Windows 上 rmSync 打开中的文件会失败，没有损害；macOS/Linux 上会真的把它
+// unlink 掉 —— 之后写入落到已删除的 inode，重启后最近记的账全部消失。
+// ---------------------------------------------------------------------------
+
+test('导出目标就是正在使用的账本文件时，拒绝并说清楚', () => {
+  const target = ledgerWith(2, tempDir())
+
+  expect(() => assertNotLiveLedger(defaultDatabasePath(target.dir), target.dir)).toThrow(
+    /正在使用/
+  )
+  // 换个名字（同一目录）不受影响 —— 拦的是文件本身，不是目录。
+  expect(() => assertNotLiveLedger(join(target.dir, '备份.db'), target.dir)).not.toThrow()
+
+  // 拦住之后账本还完好。
+  expect(countOf(target.db)).toBe(2)
+  disposeDatabaseIn(target.db)
   rmSync(target.dir, { recursive: true, force: true })
 })

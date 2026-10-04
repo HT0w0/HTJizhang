@@ -3,18 +3,8 @@ import type { JSX } from 'react'
 import type { RestorePreview } from '@shared/types'
 import { buildRestoreWarning, restoreDoneNotice } from '@shared/backup'
 import { formatMonthForDisplay } from '@shared/month'
+import { ACTIVE_PAGE_KEY, RESTORE_NOTICE_KEY } from '../sessionKeys'
 import ConfirmDialog from './ConfirmDialog'
-
-/**
- * 恢复成功后、界面重新载入之前，用来把提示语带过重载的那把钥匙。
- *
- * 为什么非要走 sessionStorage：替换账本换掉的是主进程里的数据库连接，
- * 而四个页面都是常驻挂载的、各自在内存里存着上一次取到的数据 ——
- * 不重新载入，账单页会继续显示**已经被替换掉的那个账本**的内容。
- * 不重新载入不行，而重新载入会把 React 的 state 全清掉，提示语没地方放，
- * 所以只能先写进 sessionStorage 带过去（session 级的，关掉软件就没了）。
- */
-const RESTORE_NOTICE_KEY = 'ht-restore-notice'
 
 /** '全部账单' 在下拉框里的取值。空串而不是 null —— <select> 的 value 只能是字符串。 */
 const ALL_MONTHS = ''
@@ -128,8 +118,13 @@ export default function DataBackup(): JSX.Element {
     setBusy('restore')
     setError('')
     try {
-      const done = await window.ht.backup.restore(preview.path)
+      // 自动备份的名字用预览时给用户看过的那个，不在这里重新取时间 ——
+      // 重新取会让确认框里写的名字和磁盘上的差一秒，用户照着找会找不到。
+      const done = await window.ht.backup.restore(preview.path, preview.autoBackupFileName)
       sessionStorage.setItem(RESTORE_NOTICE_KEY, restoreDoneNotice(done.fileName, done.count))
+      // 重载之后必须回到设置页：提示就挂在下面这一页上。不写这一下，重载会落到
+      // 默认的「记一笔」页，而提示在被 hidden 的设置页里 —— 用户什么也看不到。
+      sessionStorage.setItem(ACTIVE_PAGE_KEY, 'settings')
       // 必须重新载入：四个页面都常驻挂载、各自存着上一个账本的数据，
       // 原地刷新会有页面漏掉，用户会看到「账单页还是旧的、统计页是新的」。
       location.reload()

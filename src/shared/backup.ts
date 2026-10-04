@@ -36,6 +36,21 @@ export function autoBackupFileName(stamp: string): string {
   return `HT记账-导入前自动备份-${stamp}.db`
 }
 
+/**
+ * 上面那个函数产出的名字长什么样。
+ *
+ * 用途只有一个：恢复时名字要**从界面传回主进程**（确认框里显示的那个名字，
+ * 必须和最后真正写盘的名字是同一个 —— 否则用户照着提示去数据文件夹里找，
+ * 会找不到）。而主进程拿到一个界面给的字符串就往数据目录里拼路径，
+ * 得先确认它确实是「我们自己产出的那种名字」，
+ * 不能是 `..\..\别的地方` 这类东西。
+ */
+const AUTO_BACKUP_NAME = /^HT记账-导入前自动备份-\d{4}-\d{2}-\d{2}-\d{6}\.db$/
+
+export function isAutoBackupFileName(name: string): boolean {
+  return AUTO_BACKUP_NAME.test(name)
+}
+
 export interface RestoreWarningInput {
   /** 用户选中的备份文件名。 */
   readonly fileName: string
