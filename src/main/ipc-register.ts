@@ -102,6 +102,29 @@ export function registerIpcHandlers(holder: DatabaseHolder): void {
 let lastSaveDir: string | undefined
 
 /**
+ * 验证脚本用的「弹框替身」。
+ *
+ * 为什么需要：原生文件框是**操作系统的窗口**，CDP 够不着、点不动。于是
+ * 「导出到哪」和「从哪个文件恢复」这两条路径在脚本里一步都走不了 ——
+ * 而恢复是全软件**唯一不可逆**的操作，恰恰是最该被客观验证的一个。
+ * 有了这两个环境变量，验证脚本能走完整的：点按钮 → 看到确认框里的
+ * 「备份里有 N 笔 / 当前有 M 笔」→ 点「替换」→ 真的换掉了 → 界面重新载入。
+ *
+ * ⚠️ 三条约束，改这段代码时别破坏：
+ * 1. **用 app.isPackaged 挡住**：打包给用户的那份里这条分支**根本不存在**。
+ *    它不是一个「用户可以打开的开关」，只在你从源码跑（含验证脚本）时才可能生效。
+ * 2. **它不跳过确认框**。恢复照样得先看到那段警告、再点「替换」——
+ *    去掉的是文件选择框，不是用户的同意。
+ * 3. 值取 `__cancel__` 时返回 null，用来验证「用户取消」这条路径。
+ *
+ * 见 CLAUDE.md §5.27。
+ */
+const testSaveDir = app.isPackaged ? undefined : process.env['HT_TEST_SAVE_DIR']
+const testOpenPath = app.isPackaged ? undefined : process.env['HT_TEST_OPEN_PATH']
+/** 传给 HT_TEST_OPEN_PATH 表示「用户点了取消」。 */
+const CANCEL = '__cancel__'
+
+/**
  * 弹「另存为」对话框。
  *
  * defaultPath 用**上次存过的目录** + 这次的默认文件名：用户把备份存到 U 盘之后，
@@ -110,6 +133,9 @@ let lastSaveDir: string | undefined
  * 用户取消时返回 null —— 那是正常操作，不是错误，不该弹报错。
  */
 async function pickSavePath(defaultFileName: string): Promise<string | null> {
+  // 验证脚本的替身，见上面 testSaveDir 的说明
+  if (testSaveDir !== undefined) return join(testSaveDir, defaultFileName)
+
   const window = focusedWindow()
   const options = {
     defaultPath: lastSaveDir ? join(lastSaveDir, defaultFileName) : defaultFileName,
@@ -131,6 +157,9 @@ async function pickSavePath(defaultFileName: string): Promise<string | null> {
 
 /** 弹「选一个备份文件」对话框。取消时返回 null。 */
 async function pickBackupPath(): Promise<string | null> {
+  // 验证脚本的替身，见上面 testOpenPath 的说明
+  if (testOpenPath !== undefined) return testOpenPath === CANCEL ? null : testOpenPath
+
   const window = focusedWindow()
   const options = {
     title: '选择要恢复的备份文件',
