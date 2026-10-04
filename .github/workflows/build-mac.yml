@@ -94,6 +94,11 @@ jobs:
       - name: 自动化测试
         run: npm test
 
+      # ⚠️ npm run build:mac 里带着 `--publish never`，**不能去掉**。
+      #    第一次跑这个工作流时就栽在这上面：electron-builder 一旦察觉自己在 CI 里，
+      #    会自作主张去「发布」到 GitHub，然后因为拿不到令牌而报错、整个任务变红 ——
+      #    而那时 .dmg 其实已经打好了，白等十分钟。
+      #    我们的上传是下面单独用 gh 命令做的（见「传到 Releases」那一步）。
       - name: 打包 macOS 安装包
         run: npm run build:mac
 
