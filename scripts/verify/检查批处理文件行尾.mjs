@@ -15,9 +15,17 @@
  * 用法：node scripts/verify/检查批处理文件行尾.mjs
  */
 import { readdirSync, readFileSync, statSync } from 'node:fs'
-import { join, relative } from 'node:path'
+import { dirname, join, relative, resolve } from 'node:path'
+import { fileURLToPath } from 'node:url'
 
-const ROOT = 'D:\\Claude Code\\记账APP'
+// 项目根目录 = 本文件所在目录往上两级（scripts/verify/ → scripts/ → 项目根）。
+//
+// ⚠️ 这里**不能**写死绝对路径。这个仓库是公开的，别人会克隆到自己的目录下；
+// 原先写死成 `D:\Claude Code\记账APP`，别人在自己的目录里跑 `npm run check:bat`
+// 会直接抛 ENOENT「找不到目录」。
+// 尤其难堪的是：这个脚本查的是「别的脚本会不会静默失效」，它自己反倒先坏了，
+// 会让人对整套检查失去信任。所以宁可多写两行推导，也不留一个本机路径。
+const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')
 
 /** 不检查的目录：第三方依赖与构建产物。 */
 const SKIP_DIRS = new Set(['node_modules', 'out', 'release', '.git', '.superpowers'])
