@@ -21,3 +21,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# AI 执行计划的临时工作区
+.superpowers/
