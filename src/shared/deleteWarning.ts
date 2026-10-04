@@ -1,10 +1,12 @@
 /**
- * 删除分类时的确认文案。
+ * 删除前的确认文案。
  *
  * 单独拎出来的原因：这是用户「动自己的数据之前」读到的最后一段话。
- * 写错了会让用户不敢删、或者删完发现历史账单还在而以为软件坏了。
- * 文案有分支（有没有小类、有没有账单），抽成纯函数才测得了每一条分支。
+ * 写错了会让用户不敢删、或者删完发现数据没了而以为软件坏了。
+ * 文案有分支（有没有小类、有没有账单、有没有备注），抽成纯函数才测得了每一条分支。
  */
+import { formatYuan } from './money'
+import { formatLocalDateForDisplay } from './localDate'
 
 export interface DeleteWarningInput {
   readonly name: string
@@ -38,4 +40,38 @@ export function buildDeleteWarning({ name, childCount, usage }: DeleteWarningInp
   const tail = '删错了可以在下方的「已删除的分类」里恢复。'
 
   return `${head}\n\n${middle}\n\n${tail}`
+}
+
+export interface TransactionDeleteWarningInput {
+  readonly categoryName: string
+  /** 金额，单位「分」。显示时换算成元。 */
+  readonly amountFen: number
+  /** 本地日期 YYYY-MM-DD。 */
+  readonly occurredOn: string
+  /** 备注。可以是空串。 */
+  readonly note: string
+}
+
+/**
+ * 删除一笔账的确认框正文。
+ *
+ * 与删分类不同，这里是**真删、删完找不回来**（用户 2026-10-04 拍板：不做回收站）。
+ * 所以正文分两段：
+ * 1. 先说清删的是哪一笔 —— 列表里行挨着行，用户很容易点错行。
+ *    分类 + 金额 + 日期 + 备注拼起来，足够他认出是哪一笔。
+ * 2. 再明确写「无法恢复」。这一句是用户点名要求写上的，
+ *    措辞不要改动，除非他改口。
+ */
+export function buildTransactionDeleteWarning({
+  categoryName,
+  amountFen,
+  occurredOn,
+  note
+}: TransactionDeleteWarningInput): string {
+  const firstLine = `${categoryName}　${formatYuan(amountFen)} 元`
+  // 没有备注就不留占位符：多一个全角空格看不出来，但拼出来是「2026年10月4日　」这种
+  // 带尾巴的字符串，测试和人眼都不好分辨。
+  const secondLine = `${formatLocalDateForDisplay(occurredOn)}${note === '' ? '' : `　${note}`}`
+
+  return `${firstLine}\n${secondLine}\n\n删除后将无法恢复数据，请确认删除`
 }

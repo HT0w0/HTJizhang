@@ -6,9 +6,11 @@ import { formatLocalDateForDisplay, localDateWeekday } from '@shared/localDate'
 import { formatYuan } from '@shared/money'
 import { emptyHint, groupByDay, sumByKind, summaryRows } from '@shared/transactionList'
 import type { KindFilter } from '@shared/transactionList'
+import { buildTransactionDeleteWarning } from '@shared/deleteWarning'
 import MonthSwitcher from '../components/MonthSwitcher'
 import TransactionRow from '../components/TransactionRow'
 import EditTransactionDialog from '../components/EditTransactionDialog'
+import ConfirmDialog from '../components/ConfirmDialog'
 
 const KIND_FILTERS: ReadonlyArray<{ readonly value: KindFilter; readonly label: string }> = [
   { value: 'all', label: '全部' },
@@ -28,6 +30,8 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
   const [error, setError] = useState('')
   /** 用户点开了哪一笔（null 表示没开编辑窗口）。 */
   const [editing, setEditing] = useState<TransactionListItem | null>(null)
+  /** 用户点了行尾的「删除」，正等着确认（null 表示没弹确认框）。 */
+  const [pendingDelete, setPendingDelete] = useState<TransactionListItem | null>(null)
 
   /**
    * 最近一次查询的编号。用来丢弃「过期的响应」。
@@ -37,6 +41,14 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
    * 用户会看到搜索结果和搜索框里的字对不上。编号能确保只有最后一次算数。
    */
   const requestId = useRef(0)
+
+  /**
+   * 删除的防连点闸门。用 useRef 而不是 state（CLAUDE.md §5.22）：
+   * setState 要等下一次渲染才生效，同一瞬间的两次点击读到的都是旧值。
+   * 连点两下的后果是第二次收到「这笔账不存在」——
+   * 用户明明删成功了，屏幕上却弹一句报错，会以为没删干净。
+   */
+  const deletingRef = useRef(false)
 
   // 每次切回本页都重新问一次「今天是几号」——
   // 这样跨零点（甚至跨月）之后，「回到本月」指向的仍是真正的本月。
@@ -77,6 +89,29 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
       .finally(() => {
         if (id === requestId.current) setLoading(false)
       })
+  }
+
+  /**
+   * 确认删除。
+   *
+   * 失败时**照样重新拉一次列表**：删除失败的常见原因是「这一笔其实已经不在库里了」
+   * （界面上还留着过期的一行），刷新能让列表回到真实状态，
+   * 否则用户会盯着一行删不掉、又看不出哪里不对的账。
+   */
+  async function confirmDelete(): Promise<void> {
+    const target = pendingDelete
+    if (target === null || deletingRef.current) return
+    deletingRef.current = true
+    try {
+      await window.ht.transactions.remove(target.id)
+      setError('')
+    } catch (e) {
+      setError((e as Error).message)
+    } finally {
+      deletingRef.current = false
+      setPendingDelete(null)
+      reload()
+    }
   }
 
   // 月份/筛选/搜索变化，或从别的页面切回来时，都重新拉一次
@@ -191,7 +226,17 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
                 </div>
                 <div className="divide-y divide-slate-100 dark:divide-slate-700/60">
                   {group.items.map((item) => (
-                    <TransactionRow key={item.id} item={item} onClick={() => setEditing(item)} />
+                    <TransactionRow
+                      key={item.id}
+                      item={item}
+                      onClick={() => setEditing(item)}
+                      onDelete={() => {
+                        // 先把可能开着的编辑窗关掉：它的确认框和下面这个用的是同一个
+                        // data-testid="confirm-dialog"，两个同时在文档里就没法分辨谁是谁了。
+                        setEditing(null)
+                        setPendingDelete(item)
+                      }}
+                    />
                   ))}
                 </div>
               </div>
@@ -241,6 +286,21 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
           setEditing(null)
           reload()
         }}
+      />
+
+      {/*
+        列表里直接点「删除」弹的这个确认框。措辞来自 shared/deleteWarning.ts，
+        和编辑窗里那条走的是同一个函数 —— 两处说法必须一模一样，
+        否则用户会怀疑其中一个是不是删法不同。
+      */}
+      <ConfirmDialog
+        open={pendingDelete !== null}
+        danger
+        title="删除这笔账？"
+        message={pendingDelete === null ? '' : buildTransactionDeleteWarning(pendingDelete)}
+        confirmLabel="删除"
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => setPendingDelete(null)}
       />
     </section>
   )

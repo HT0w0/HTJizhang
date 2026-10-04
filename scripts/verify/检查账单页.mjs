@@ -185,6 +185,57 @@ async function goto(cdp, label) {
   await sleep(800)
 }
 
+/**
+ * 把鼠标真移到某个元素上。
+ *
+ * 必须走 CDP 的 Input.dispatchMouseEvent，不能靠 JS 派发 mouseover 或者手动加类名 ——
+ * 那样验证的是「我能不能改类名」，而不是「鼠标移过去到底会不会现形」。
+ * CSS 的 :hover 只认真实指针位置，派发出来的事件改不了它。
+ *
+ * 移完之后要等一会儿：按钮上挂着 transition-opacity（150ms），
+ * 立刻读 getComputedStyle 拿到的是过渡中间值，不是终值（CLAUDE.md §九）。
+ */
+async function hover(cdp, testid) {
+  const rect = JSON.parse(
+    await cdp.evaluate(`
+      (function () {
+        var el = window.__T.one(${JSON.stringify(testid)})
+        if (!el) return 'null'
+        var r = el.getBoundingClientRect()
+        return JSON.stringify({
+          x: Math.round(r.left + r.width / 2),
+          y: Math.round(r.top + r.height / 2)
+        })
+      })()
+    `)
+  )
+  if (!rect) return false
+  await cdp.send('Input.dispatchMouseEvent', {
+    type: 'mouseMoved',
+    x: rect.x,
+    y: rect.y,
+    buttons: 0
+  })
+  await sleep(320)
+  return true
+}
+
+/** 把鼠标挪到左上角（那里没有账单行），用来验证「移开之后又藏起来」。 */
+async function hoverAway(cdp) {
+  await cdp.send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 2, y: 2, buttons: 0 })
+  await sleep(320)
+}
+
+/** 读元素的实际透明度。读不到元素返回 null（标识被改坏时该判失败而不是抛错）。 */
+async function opacityOf(cdp, testid) {
+  return await cdp.evaluate(`
+    (function () {
+      var el = window.__T.one(${JSON.stringify(testid)})
+      return el ? getComputedStyle(el).opacity : null
+    })()
+  `)
+}
+
 /** 往搜索框里打字。查询没有防抖，打一次字就查一次，等一会儿让结果回来。 */
 async function search(cdp, text) {
   await cdp.evaluate(`window.__T.setInput(window.__T.one('list-search'), ${JSON.stringify(text)})`)
@@ -755,6 +806,102 @@ async function main() {
       monthsArr.length === 2 && monthsArr[0] === month && monthsArr[1] === prevMonth,
       monthsArr.join(', ')
     )
+
+    // ---------- 16. 列表里直接删（鼠标移上去才出现的删除按钮） ----------
+    // 用户 2026-10-04 要求：不用先点开编辑窗，在列表里就能直接删掉一行。
+    //
+    // 这一步最容易出的错是「点删除把手也连着打开了编辑窗」——
+    // 因为 HTML 不许按钮套按钮，整行原来是**一个**按钮，现在拆成了
+    // 「行容器 div + 行内容按钮 + 删除按钮（它的兄弟）」。拆完之后
+    // 点删除**不该**再冒泡到行上。这条错当场看不出来（编辑窗弹出来，
+    // 用户以为是自己点歪了），却会让删除变得很难用。
+    let snap = await snapshot(cdp)
+    const delIds = JSON.parse(
+      await cdp.evaluate(`JSON.stringify(window.__T.byRe(/^list-delete-[0-9]+$/).map(function (e) { return Number(e.dataset.testid.slice(12)) }))`)
+    )
+    check(
+      '每一行末尾都有一个删除按钮，和行一一对应',
+      delIds.length === 3 && delIds.slice().sort().join() === snap.rowIds.slice().sort().join(),
+      `删除按钮 ${delIds.join(',')} / 行 ${snap.rowIds.join(',')}`
+    )
+    check(
+      '删除按钮的标识在文档里只有一个（不重名）',
+      (await cdp.evaluate(`window.__T.count('list-delete-${id.b}')`)) === 1 &&
+        (await cdp.evaluate(`window.__T.count('list-row-${id.b}')`)) === 1
+    )
+
+    const hiddenOpacity = await opacityOf(cdp, `list-delete-${id.b}`)
+    check('平时看不见删除按钮（不占视线的同时保留位置）', hiddenOpacity === '0', `透明度 ${hiddenOpacity}`)
+
+    const hovered = await hover(cdp, `list-row-${id.b}`)
+    const shownOpacity = await opacityOf(cdp, `list-delete-${id.b}`)
+    check('鼠标移到行上，删除按钮就出现了', hovered && shownOpacity === '1', `透明度 ${shownOpacity}`)
+
+    await hoverAway(cdp)
+    const hiddenAgain = await opacityOf(cdp, `list-delete-${id.b}`)
+    check('鼠标移开之后又藏起来', hiddenAgain === '0', `透明度 ${hiddenAgain}`)
+
+    // 点删除：先取消一次，确认不删
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-delete-${id.b}'))`)
+    await sleep(500)
+    check(
+      '点删除弹出确认框，并且文档里只有一个确认框（没和编辑窗的那个撞上）',
+      (await cdp.evaluate(`window.__T.count('confirm-dialog')`)) === 1
+    )
+    const delConfirm = await cdp.evaluate(`window.__T.label(window.__T.one('confirm-dialog'))`)
+    check(
+      '确认框写清了删的是哪一笔（分类 + 金额）',
+      delConfirm.includes('打车') && delConfirm.includes('120.00'),
+      delConfirm
+    )
+    check(
+      '确认框明确说了「删除后将无法恢复数据，请确认删除」（用户点名要的这句话）',
+      delConfirm.includes('删除后将无法恢复数据，请确认删除'),
+      delConfirm
+    )
+    check(
+      '点行尾的删除按钮不会顺手把编辑窗也打开',
+      (await cdp.evaluate(`!window.__T.one('edit-dialog')`)) === true,
+      '编辑窗不该出现'
+    )
+
+    await cdp.evaluate(`window.__T.click(window.__T.one('confirm-cancel'))`)
+    await sleep(500)
+    snap = await snapshot(cdp)
+    check('点「取消」不删，还是 3 笔', snap.total === '共 3 笔', snap.total)
+
+    // 再点一次，这回真删
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-delete-${id.b}'))`)
+    await sleep(500)
+    await cdp.evaluate(`window.__T.click(window.__T.one('confirm-ok'))`)
+    await sleep(1200)
+    snap = await snapshot(cdp)
+    check('确认后那一行从列表里消失', !snap.rowIds.includes(id.b), snap.rowIds.join(','))
+    check('笔数变成 2 笔', snap.total === '共 2 笔', snap.total)
+    check(
+      '删除后底部合计跟着变：支出 111.11、结余 7,888.89',
+      snap.summary.includes('111.11') && snap.summary.includes('7,888.89'),
+      snap.summary
+    )
+
+    // 不只看界面：直接问数据库一遍，确认那一笔是真的没了，不是只是被藏起来
+    const goneInDb = await cdp.evaluate(`
+      (async function () {
+        var rows = await window.ht.transactions.list({ month: '${month}', kind: 'all', keyword: '' })
+        return String(rows.some(function (r) { return r.id === ${id.b} }))
+      })()
+    `)
+    check('数据库里也真的没了（不是只在界面上藏起来）', goneInDb === 'false', goneInDb)
+
+    // 拆结构最容易误伤的是原本的主要交互：点整行开编辑窗。确认它还在。
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-row-${id.a}'))`)
+    await sleep(700)
+    check(
+      '拆完结构之后，点整行仍然能打开编辑窗（原来最主要的操作没被弄坏）',
+      (await cdp.evaluate(`!!window.__T.one('edit-dialog')`)) === true
+    )
+    await cdp.evaluate(`window.__T.click(window.__T.one('edit-cancel'))`)
+    await sleep(500)
   } finally {
     session.ws.close()
     session.child.kill()

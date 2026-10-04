@@ -3,6 +3,7 @@ import type { JSX } from 'react'
 import type { CategoryKind, PaymentMethod, TransactionListItem } from '@shared/types'
 import { formatYuan, yuanToFen } from '@shared/money'
 import { formatLocalDateForDisplay } from '@shared/localDate'
+import { buildTransactionDeleteWarning } from '@shared/deleteWarning'
 import AmountInput from './AmountInput'
 import CategoryPicker from './CategoryPicker'
 import PaymentMethodPicker from './PaymentMethodPicker'
@@ -292,11 +293,9 @@ export default function EditTransactionDialog({
         open={confirmingDelete}
         danger
         title="删除这笔账？"
-        message={
-          `${item.categoryName}　${formatYuan(item.amountFen)} 元\n` +
-          `${formatLocalDateForDisplay(item.occurredOn)}${item.note === '' ? '' : `　${item.note}`}\n\n` +
-          '删除后无法恢复。'
-        }
+        // 和列表里行尾那个「删除」走同一个函数：两条删除路径的措辞必须完全一致，
+        // 不然用户会以为它们删法不同。
+        message={buildTransactionDeleteWarning(item)}
         confirmLabel="删除"
         onConfirm={() => void remove()}
         onCancel={() => setConfirmingDelete(false)}
