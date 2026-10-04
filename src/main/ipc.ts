@@ -2,8 +2,14 @@
  * 界面与数据库之间的通道。
  *
  * 拆成两层：
- * - categoryHandlers(db) 返回一个纯对象，不依赖 electron，可以直接单测；
- * - registerIpcHandlers(db) 把它挂到 ipcMain 上，这层没有逻辑，不需要测。
+ * - categoryHandlers(getDb) 返回一个纯对象，不依赖 electron，可以直接单测；
+ * - registerIpcHandlers(ctx) 把它挂到 ipcMain 上，这层没有逻辑，不需要测。
+ *
+ * ⚠️ 各处理器拿到的是「取当前连接」的**函数**（DbGetter），不是连接本身。
+ * 第 6 阶段的「从备份恢复」会把账本整个换掉、连接对象也跟着换一个新的，
+ * 如果处理器在注册时就把连接抄在手里，恢复之后**每一个功能都会对着一个
+ * 已经关闭的数据库报错** —— 而且症状是「点了没反应 / 程序内部出错」，
+ * 完全指不到根因。传函数出去，它们每次调用时现取。
  *
  * 所有处理器都返回 IpcResult 而不是抛异常：ipcMain.handle 抛出后，
  * 渲染进程拿到的消息会被包上 "Error invoking remote method '...'" 这串英文，
@@ -27,6 +33,14 @@ import type {
   UpdateTransactionInput
 } from '@shared/types'
 import { todayLocal } from '@shared/localDate'
+import { autoBackupFileName, backupFileName, backupStamp } from '@shared/backup'
+import { csvFileName } from '@shared/csv'
+import {
+  exportDatabaseTo,
+  inspectBackupFile,
+  restoreFromBackup,
+  writeCsvFile
+} from './db/backup'
 import {
   createTransaction,
   deleteTransaction,
@@ -48,6 +62,13 @@ import {
   usageCounts
 } from './db/categories'
 import { statsOverview } from './db/stats'
+
+/**
+ * 怎么拿到「当前正在用的那个数据库连接」。
+ *
+ * 见文件顶部说明：恢复备份会把连接换掉，所以处理器不能把连接抄在手里。
+ */
+export type DbGetter = () => DatabaseSync
 
 export interface CategoryHandlers {
   list(): Promise<IpcResult<CategoryNode[]>>
@@ -101,23 +122,28 @@ function guard<T>(fn: () => T): IpcResult<T> {
   }
 }
 
-export function categoryHandlers(db: DatabaseSync): CategoryHandlers {
+export function categoryHandlers(getDb: DbGetter): CategoryHandlers {
   return {
-    list: async () => guard(() => listTree(db)),
-    listArchived: async () => guard(() => listArchivedTree(db)),
-    usage: async () => guard(() => usageCounts(db)),
-    create: async (input) => guard(() => createCategory(db, input)),
-    rename: async (id, name) => guard(() => renameCategory(db, id, name)),
-    setIcon: async (id, icon) => guard(() => setCategoryIcon(db, id, icon)),
+    list: async () => guard(() => listTree(getDb())),
+    listArchived: async () => guard(() => listArchivedTree(getDb())),
+    usage: async () => guard(() => usageCounts(getDb())),
+    create: async (input) => guard(() => createCategory(getDb(), input)),
+    rename: async (id, name) => guard(() => renameCategory(getDb(), id, name)),
+    setIcon: async (id, icon) => guard(() => setCategoryIcon(getDb(), id, icon)),
     reorder: async (kind, parentId, orderedIds) =>
-      guard(() => reorderSiblings(db, kind, parentId, orderedIds)),
-    archive: async (id) => guard(() => archiveCategory(db, id)),
-    restore: async (id) => guard(() => restoreCategory(db, id)),
-    restoreBuiltins: async () => guard(() => restoreBuiltins(db))
+      guard(() => reorderSiblings(getDb(), kind, parentId, orderedIds)),
+    archive: async (id) => guard(() => archiveCategory(getDb(), id)),
+    restore: async (id) => guard(() => restoreCategory(getDb(), id)),
+    restoreBuiltins: async () => guard(() => restoreBuiltins(getDb()))
   }
 }
 
-export { CATEGORY_CHANNELS, STATS_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+export {
+  BACKUP_CHANNELS,
+  CATEGORY_CHANNELS,
+  STATS_CHANNELS,
+  TRANSACTION_CHANNELS
+} from '@shared/ipcChannels'
 
 export interface TransactionHandlers {
   create(input: CreateTransactionInput): Promise<IpcResult<Transaction>>
@@ -135,17 +161,17 @@ export interface TransactionHandlers {
  * 与分类处理器一样，全部返回 IpcResult 而不是抛异常 ——
  * ipcMain.handle 抛出后渲染进程拿到的消息会被包上英文前缀。
  */
-export function transactionHandlers(db: DatabaseSync): TransactionHandlers {
+export function transactionHandlers(getDb: DbGetter): TransactionHandlers {
   return {
-    create: async (input) => guard(() => createTransaction(db, input)),
-    recentCategoryIds: async () => guard(() => recentCategoryIds(db)),
+    create: async (input) => guard(() => createTransaction(getDb(), input)),
+    recentCategoryIds: async () => guard(() => recentCategoryIds(getDb())),
     // 「今天」由主进程算，界面不自己算 —— 界面里算容易误用 UTC（CLAUDE.md §5.2），
     // 而这里与记账数据用的是同一套日期口径。
     today: async () => guard(() => todayLocal()),
-    list: async (input) => guard(() => listTransactions(db, input)),
-    update: async (input) => guard(() => updateTransaction(db, input)),
-    remove: async (id) => guard(() => deleteTransaction(db, id)),
-    months: async () => guard(() => monthsWithData(db))
+    list: async (input) => guard(() => listTransactions(getDb(), input)),
+    update: async (input) => guard(() => updateTransaction(getDb(), input)),
+    remove: async (id) => guard(() => deleteTransaction(getDb(), id)),
+    months: async () => guard(() => monthsWithData(getDb()))
   }
 }
 
@@ -160,8 +186,160 @@ export interface StatsHandlers {
  * 分四次取的话，四次之间用户刚好记了一笔，就会出现「卡片写 100 元、
  * 饼图加起来 120 元」这种对不上、且**当场看不出来**的数字。
  */
-export function statsHandlers(db: DatabaseSync): StatsHandlers {
+export function statsHandlers(getDb: DbGetter): StatsHandlers {
   return {
-    overview: async (month) => guard(() => statsOverview(db, month))
+    overview: async (month) => guard(() => statsOverview(getDb(), month))
+  }
+}
+
+/**
+ * 备份相关的处理器需要的那点「外界」能力。
+ *
+ * 做成注入的，是为了让本文件继续不依赖 electron（CLAUDE.md 的惯例）：
+ * 弹保存框、弹选择框、打开文件夹都得用 electron 的 dialog/shell，
+ * 那些在 ipc-register.ts 里实现，测试里换成假的，于是一整套备份逻辑
+ * （包括「用户取消」「选错文件」）都能在命令行里跑。
+ */
+export interface BackupContext {
+  readonly getDb: DbGetter
+  /** 数据目录，即 app.getPath('userData')。 */
+  readonly userDataDir: string
+  /** 恢复成功后，把主进程手里那个连接换成新的。必须换，见 DbGetter 的说明。 */
+  readonly replaceDatabase: (db: DatabaseSync) => void
+  /** 「今天」的本地日期串。由调用方给，界面不自己算（§5.2）。 */
+  readonly today: () => string
+  /** 弹保存框，返回用户选的完整路径；取消时返回 null。 */
+  readonly pickSavePath: (defaultFileName: string) => Promise<string | null>
+  /** 弹选择框，返回用户选的备份文件；取消时返回 null。 */
+  readonly pickBackupPath: () => Promise<string | null>
+  /** 在系统文件管理器里打开数据目录。 */
+  readonly openDataFolder: () => Promise<void>
+}
+
+/** 用户点了「导出备份文件」之后的结果。cancelled 表示用户在保存框里点了取消。 */
+export interface ExportOutcome {
+  readonly cancelled: boolean
+  /** 保存到的完整路径。取消时是空串。 */
+  readonly path: string
+}
+
+/** 用户在文件框里选中一个备份之后，先给他看的「这份备份里有什么」。 */
+export interface RestorePreview {
+  readonly path: string
+  readonly fileName: string
+  /** 备份文件里有几笔账。 */
+  readonly backupCount: number
+  readonly backupCategories: number
+  readonly firstDate: string
+  readonly lastDate: string
+  /** 当前账本里有几笔账。和上面那个一起给用户判断选没选错文件。 */
+  readonly currentCount: number
+  /** 替换前自动另存的那一份的文件名。要显示在确认框里。 */
+  readonly autoBackupFileName: string
+}
+
+/** 恢复完成后返回给界面的东西（界面会拿它显示「已恢复 N 笔」并重新载入）。 */
+export interface RestoreOutcome {
+  readonly fileName: string
+  readonly count: number
+}
+
+export interface BackupHandlers {
+  exportDatabase(): Promise<IpcResult<ExportOutcome>>
+  exportCsv(month: string | null): Promise<IpcResult<ExportOutcome>>
+  openDataFolder(): Promise<IpcResult<void>>
+  /** 弹选择框 + 检查文件。用户取消时 preview 为 null。这一步不动任何数据。 */
+  pickRestoreFile(): Promise<IpcResult<RestorePreview | null>>
+  restore(path: string): Promise<IpcResult<RestoreOutcome>>
+}
+
+/** 从文件名里取出「叫什么」，用于界面显示。 */
+function baseName(path: string): string {
+  const parts = path.split(/[\\/]/)
+  return parts[parts.length - 1] ?? path
+}
+
+/**
+ * 备份与恢复的处理器。
+ *
+ * ⚠️ 替换顺序是刻意的：**先检查、再动手**。
+ * 「检查备份文件」这一步可能失败（用户选错文件、版本太新），
+ * 失败时账本必须一个字节都没动 —— 挑错文件不该有任何代价。
+ * 所以 inspectBackupFile 在 restoreFromBackup 的最前面，且它全程只读。
+ */
+export function backupHandlers(ctx: BackupContext): BackupHandlers {
+  return {
+    exportDatabase: async () =>
+      guardAsync(async () => {
+        const path = await ctx.pickSavePath(backupFileName(ctx.today()))
+        if (path === null) return { cancelled: true, path: '' }
+        exportDatabaseTo(ctx.getDb(), path)
+        return { cancelled: false, path }
+      }),
+
+    exportCsv: async (month) =>
+      guardAsync(async () => {
+        const path = await ctx.pickSavePath(csvFileName(month, ctx.today()))
+        if (path === null) return { cancelled: true, path: '' }
+        writeCsvFile(ctx.getDb(), month, path)
+        return { cancelled: false, path }
+      }),
+
+    openDataFolder: async () =>
+      guardAsync(async () => {
+        await ctx.openDataFolder()
+      }),
+
+    // 只问、不动：这一步不改任何数据，用户看完确认框反悔了就什么都没发生。
+    pickRestoreFile: async () =>
+      guardAsync(async () => {
+        const path = await ctx.pickBackupPath()
+        if (path === null) return null
+
+        const info = inspectBackupFile(path)
+        const currentCount = (
+          ctx.getDb().prepare('SELECT count(*) AS n FROM transactions').get() as { n: number }
+        ).n
+
+        return {
+          path,
+          fileName: baseName(path),
+          backupCount: info.transactions,
+          backupCategories: info.categories,
+          firstDate: info.firstDate,
+          lastDate: info.lastDate,
+          currentCount,
+          autoBackupFileName: autoBackupFileName(backupStamp(new Date()))
+        }
+      }),
+
+    restore: async (path) =>
+      guard(() => {
+        const before = inspectBackupFile(path)
+        const next = restoreFromBackup({
+          userDataDir: ctx.userDataDir,
+          backupPath: path,
+          currentDb: ctx.getDb(),
+          autoBackupName: autoBackupFileName(backupStamp(new Date()))
+        })
+        // 主进程手里那个引用必须跟着换，否则恢复之后所有功能都对着旧连接报错。
+        ctx.replaceDatabase(next)
+        return { fileName: baseName(path), count: before.transactions }
+      })
+  }
+}
+
+/**
+ * guard 的异步版。
+ *
+ * 为什么需要：导出/弹框这些是 async 的，`guard` 收的是同步函数，
+ * async 函数抛出的错会变成一个**被拒绝的 Promise**，穿过 guard 直接冒到
+ * ipcMain 那里，渲染进程收到的就是那串英文前缀了 —— 正是 IpcResult 要避免的事。
+ */
+async function guardAsync<T>(fn: () => Promise<T>): Promise<IpcResult<T>> {
+  try {
+    return { ok: true, value: await fn() }
+  } catch (error) {
+    return { ok: false, message: toMessage(error) }
   }
 }

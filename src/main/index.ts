@@ -1,16 +1,20 @@
 import { join } from 'node:path'
-import type { DatabaseSync } from 'node:sqlite'
 import { app, BrowserWindow, dialog, shell } from 'electron'
 import { disposeDatabaseIn, initDatabaseIn } from './db'
-import { registerIpcHandlers } from './ipc-register'
+import { registerIpcHandlers, type DatabaseHolder } from './ipc-register'
 
 /**
  * 当前打开的数据库。
  *
  * 由主进程持有唯一一份引用，通过 IPC 提供给界面 ——
  * 渲染进程永远碰不到数据库和文件系统（CLAUDE.md §5.3）。
+ *
+ * ⚠️ 第 6 阶段的「从备份恢复」会把连接整个换掉，所以这里持有的是
+ * 一个**可变的对象**而不是数据库本身：IPC 层拿到这个对象的引用之后，
+ * 恢复时改的是 `holder.db`，这里和 IPC 层看到的是同一个新连接。
+ * 换成两个各自独立的变量就会各指各的，退出时关的是已经作废的那个。
  */
-let database: DatabaseSync | null = null
+let holder: DatabaseHolder | null = null
 
 function createWindow(): void {
   const mainWindow = new BrowserWindow({
@@ -83,8 +87,11 @@ if (!gotTheLock) {
     app.setAppUserModelId('com.ht.jizhang')
 
     try {
-      database = initDatabaseIn(app.getPath('userData'))
-      registerIpcHandlers(database)
+      holder = {
+        db: initDatabaseIn(app.getPath('userData')),
+        userDataDir: app.getPath('userData')
+      }
+      registerIpcHandlers(holder)
     } catch (error) {
       // 数据库都打不开，界面起来也没用。给一句用户能看懂的中文，
       // 并告诉他数据文件在哪，方便把文件发给开发者排查。
@@ -113,9 +120,11 @@ if (!gotTheLock) {
   })
 
   app.on('will-quit', () => {
-    if (database) {
-      disposeDatabaseIn(database)
-      database = null
+    if (holder) {
+      // 关的是 holder 里**此刻**那个连接 —— 如果用户中途恢复过备份，
+      // 这个字段已经被换成新连接了，这里必须跟着换（见上面的说明）。
+      disposeDatabaseIn(holder.db)
+      holder = null
     }
   })
 

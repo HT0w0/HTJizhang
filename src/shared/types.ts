@@ -170,6 +170,57 @@ export interface HtApi {
   readonly categories: CategoriesApi
   readonly transactions: TransactionsApi
   readonly stats: StatsApi
+  readonly backup: BackupApi
+}
+
+// ---------------------------------------------------------------------------
+// 备份与恢复
+// ---------------------------------------------------------------------------
+
+/** 导出的结果。cancelled 表示用户在保存框里点了取消 —— 那不是错误，不该弹报错。 */
+export interface ExportOutcome {
+  readonly cancelled: boolean
+  /** 保存到的完整路径；取消时是空串。 */
+  readonly path: string
+}
+
+/**
+ * 用户选好备份文件之后，先给他看的「这份备份里有什么」。
+ *
+ * 这一步**不动任何数据**：用户看完确认框反悔了，账本必须一个字节都没变。
+ * 界面上要拿 backupCount 和 currentCount 一起显示 —— 用户手里可能有好几份备份，
+ * 「备份里有 130 笔 / 当前账本有 128 笔」是他判断自己选没选错文件的唯一依据。
+ */
+export interface RestorePreview {
+  readonly path: string
+  readonly fileName: string
+  readonly backupCount: number
+  readonly backupCategories: number
+  /** 备份里最早/最后一笔的日期，形如 'YYYY-MM-DD'；没有账时是空串。 */
+  readonly firstDate: string
+  readonly lastDate: string
+  readonly currentCount: number
+  /** 替换前会自动另存一份，这是那份的文件名。确认框里要写出来。 */
+  readonly autoBackupFileName: string
+}
+
+/** 恢复成功的结果。界面拿它显示「已恢复 N 笔」然后重新载入。 */
+export interface RestoreOutcome {
+  readonly fileName: string
+  readonly count: number
+}
+
+export interface BackupApi {
+  /** 弹保存框，把整个账本导出成一个 .db 备份文件。 */
+  exportDatabase(): Promise<ExportOutcome>
+  /** 弹保存框，导出 CSV。month 为 null 表示全部账单。 */
+  exportCsv(month: string | null): Promise<ExportOutcome>
+  /** 在系统文件管理器里打开数据文件夹。 */
+  openDataFolder(): Promise<void>
+  /** 弹选择框并检查选中的文件。用户取消时返回 null。不改动任何数据。 */
+  pickRestoreFile(): Promise<RestorePreview | null>
+  /** 用备份替换当前账本。**不可逆**，界面上必须先弹确认框。 */
+  restore(path: string): Promise<RestoreOutcome>
 }
 
 // ---------------------------------------------------------------------------

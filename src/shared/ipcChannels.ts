@@ -31,3 +31,11 @@ export const TRANSACTION_CHANNELS = {
 export const STATS_CHANNELS = {
   overview: 'stats:overview'
 } as const
+
+export const BACKUP_CHANNELS = {
+  exportDatabase: 'backup:exportDatabase',
+  exportCsv: 'backup:exportCsv',
+  openDataFolder: 'backup:openDataFolder',
+  pickRestoreFile: 'backup:pickRestoreFile',
+  restore: 'backup:restore'
+} as const

@@ -5,8 +5,9 @@
  * 只是一个字符串路径模块，拿不到 ipcMain。业务逻辑放在 ./ipc.ts（不含 electron，
  * 可直接单测），本文件只做「把已有函数挂上去」这一件事，没有逻辑也就不需要测。
  */
+import { join, dirname } from 'node:path'
 import type { DatabaseSync } from 'node:sqlite'
-import { ipcMain } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, shell } from 'electron'
 import type {
   CategoryKind,
   CreateCategoryInput,
@@ -14,17 +15,29 @@ import type {
   ListTransactionsInput,
   UpdateTransactionInput
 } from '@shared/types'
+import { todayLocal } from '@shared/localDate'
 import {
+  BACKUP_CHANNELS,
   CATEGORY_CHANNELS,
   STATS_CHANNELS,
   TRANSACTION_CHANNELS,
+  backupHandlers,
   categoryHandlers,
   statsHandlers,
   transactionHandlers
 } from './ipc'
 
-export function registerIpcHandlers(db: DatabaseSync): void {
-  const h = categoryHandlers(db)
+/** 主进程手里那份「当前连接」。恢复备份会把它整个换掉。 */
+export interface DatabaseHolder {
+  db: DatabaseSync
+  /** 数据目录，即 app.getPath('userData')。 */
+  userDataDir: string
+}
+
+export function registerIpcHandlers(holder: DatabaseHolder): void {
+  const getDb = (): DatabaseSync => holder.db
+
+  const h = categoryHandlers(getDb)
 
   ipcMain.handle(CATEGORY_CHANNELS.list, () => h.list())
   ipcMain.handle(CATEGORY_CHANNELS.listArchived, () => h.listArchived())
@@ -41,7 +54,7 @@ export function registerIpcHandlers(db: DatabaseSync): void {
   ipcMain.handle(CATEGORY_CHANNELS.restore, (_event, id: number) => h.restore(id))
   ipcMain.handle(CATEGORY_CHANNELS.restoreBuiltins, () => h.restoreBuiltins())
 
-  const t = transactionHandlers(db)
+  const t = transactionHandlers(getDb)
 
   ipcMain.handle(TRANSACTION_CHANNELS.create, (_event, input: CreateTransactionInput) =>
     t.create(input)
@@ -57,7 +70,87 @@ export function registerIpcHandlers(db: DatabaseSync): void {
   ipcMain.handle(TRANSACTION_CHANNELS.remove, (_event, id: number) => t.remove(id))
   ipcMain.handle(TRANSACTION_CHANNELS.months, () => t.months())
 
-  const s = statsHandlers(db)
+  const s = statsHandlers(getDb)
 
   ipcMain.handle(STATS_CHANNELS.overview, (_event, month: string) => s.overview(month))
+
+  const b = backupHandlers({
+    getDb,
+    userDataDir: holder.userDataDir,
+    // 换连接。**必须做**：不换的话，恢复之后每个功能都对着一个已经关掉的
+    // 数据库报错，而症状只是「点了没反应」，完全指不到根因。
+    replaceDatabase: (next) => {
+      holder.db = next
+    },
+    today: () => todayLocal(),
+    pickSavePath: (defaultFileName) => pickSavePath(defaultFileName),
+    pickBackupPath: () => pickBackupPath(),
+    openDataFolder: async () => {
+      const error = await shell.openPath(holder.userDataDir)
+      if (error !== '') throw new Error(`打不开数据文件夹：${error}`)
+    }
+  })
+
+  ipcMain.handle(BACKUP_CHANNELS.exportDatabase, () => b.exportDatabase())
+  ipcMain.handle(BACKUP_CHANNELS.exportCsv, (_event, month: string | null) => b.exportCsv(month))
+  ipcMain.handle(BACKUP_CHANNELS.openDataFolder, () => b.openDataFolder())
+  ipcMain.handle(BACKUP_CHANNELS.pickRestoreFile, () => b.pickRestoreFile())
+  ipcMain.handle(BACKUP_CHANNELS.restore, (_event, path: string) => b.restore(path))
+}
+
+/** 上次用户把文件存到了哪里。再做一次同类导出时，保存框从那儿开始。 */
+let lastSaveDir: string | undefined
+
+/**
+ * 弹「另存为」对话框。
+ *
+ * defaultPath 用**上次存过的目录** + 这次的默认文件名：用户把备份存到 U 盘之后，
+ * 下次导出还应该从 U 盘开始，而不是每次都从「文档」重新找一遍。
+ *
+ * 用户取消时返回 null —— 那是正常操作，不是错误，不该弹报错。
+ */
+async function pickSavePath(defaultFileName: string): Promise<string | null> {
+  const window = focusedWindow()
+  const options = {
+    defaultPath: lastSaveDir ? join(lastSaveDir, defaultFileName) : defaultFileName,
+    filters: [
+      { name: '备份文件', extensions: ['db'] },
+      { name: '表格文件', extensions: ['csv'] },
+      { name: '所有文件', extensions: ['*'] }
+    ]
+  }
+
+  const result = window
+    ? await dialog.showSaveDialog(window, options)
+    : await dialog.showSaveDialog(options)
+
+  if (result.canceled || !result.filePath) return null
+  lastSaveDir = dirname(result.filePath)
+  return result.filePath
+}
+
+/** 弹「选一个备份文件」对话框。取消时返回 null。 */
+async function pickBackupPath(): Promise<string | null> {
+  const window = focusedWindow()
+  const options = {
+    title: '选择要恢复的备份文件',
+    defaultPath: lastSaveDir ?? app.getPath('userData'),
+    properties: ['openFile' as const],
+    filters: [{ name: '备份文件', extensions: ['db'] }]
+  }
+
+  const result = window
+    ? await dialog.showOpenDialog(window, options)
+    : await dialog.showOpenDialog(options)
+
+  if (result.canceled || result.filePaths.length === 0) return null
+  return result.filePaths[0] ?? null
+}
+
+/**
+ * 弹框要挂在某个窗口上，否则在 macOS 上会变成一个不跟着应用走的游离窗口。
+ * 拿不到窗口（理论上不该发生）时返回 undefined，那边有兜底。
+ */
+function focusedWindow(): BrowserWindow | undefined {
+  return BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0]
 }

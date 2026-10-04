@@ -8,7 +8,12 @@ import type {
   ListTransactionsInput,
   UpdateTransactionInput
 } from '@shared/types'
-import { CATEGORY_CHANNELS, STATS_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+import {
+  BACKUP_CHANNELS,
+  CATEGORY_CHANNELS,
+  STATS_CHANNELS,
+  TRANSACTION_CHANNELS
+} from '@shared/ipcChannels'
 
 /**
  * 把一个 IPC 调用包成「失败就抛干净中文错误」的形式。
@@ -54,6 +59,13 @@ const api: HtApi = {
   },
   stats: {
     overview: (month: string) => call(STATS_CHANNELS.overview, month)
+  },
+  backup: {
+    exportDatabase: () => call(BACKUP_CHANNELS.exportDatabase),
+    exportCsv: (month: string | null) => call(BACKUP_CHANNELS.exportCsv, month),
+    openDataFolder: () => call(BACKUP_CHANNELS.openDataFolder),
+    pickRestoreFile: () => call(BACKUP_CHANNELS.pickRestoreFile),
+    restore: (path: string) => call(BACKUP_CHANNELS.restore, path)
   }
 }
 
