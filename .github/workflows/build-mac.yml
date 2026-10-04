@@ -1,0 +1,177 @@
+# 在 GitHub 的云端苹果电脑上打包 macOS 安装包（.dmg）。
+#
+# 为什么必须放云端：本机是 Windows，**造不出 macOS 安装包** —— 这一条是 §四
+# 里就定下来的（当时给用户对比过三个方案，这是选定的那个）。
+#
+# ---------------------------------------------------------------------------
+# 什么时候跑（用户 2026-10-04 拍板：「打标签自动 + 也能手动点」）
+#
+#   1. 推一个 v 开头的标签 → 自动跑。意思是「我要发新版本了」。
+#   2. 在仓库网页的 Actions 页手动点一下 → 也能跑。想单独试一次打包时用。
+#
+#   平时不动。不会在每次改代码时都出一堆没人下载的包。
+#
+# 打出来的包只有测试全绿才会传上去（同一次拍板「要，测试不过就不出包」）——
+# 下载页上的包必须是通过测试的那一版，不能出现「测试红着、包却照样发出去」。
+# ---------------------------------------------------------------------------
+#
+# ⚠️ 这个文件**改动之后没法在本机验证**：本机没有苹果电脑，跑不了 macOS 打包。
+#    改完只能推上去、在 Actions 页面看云端跑得对不对。所以每处都写了为什么。
+#
+# ⚠️ 它会往 Releases 上传文件，所以推送这个文件需要 GitHub 令牌带 `workflow` 权限
+#    （CLAUDE.md §10.4 记着这件事）。权限不够时 GitHub 会直接拒绝推送，
+#    而不是「推上去了但不生效」—— 这一点是好的。
+
+name: 打包 macOS 安装包
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '把打好的 .dmg 传到哪个版本（例如 v1.0.0）'
+        required: true
+        default: 'v1.0.0'
+
+# 默认权限是「只读」，那样上传附件会被拒。只有这里明确给了写权限才传得上去。
+permissions:
+  contents: write
+
+env:
+  # ---------------------------------------------------------------------------
+  # 镜像指向：仓库里的 .npmrc 把 Electron 二进制指向了国内镜像
+  # （本机从 GitHub 下载实测只有 18 KB/s，国内镜像 1.5 MB/s，差 80 倍）。
+  # 但云端机器在美国，指向国内镜像反而绕了大半个地球 —— 这里要盖掉它。
+  #
+  # 为什么要设两组变量：`ELECTRON_*` 是 Electron 工具链自己认的；
+  # `.npmrc` 里的键会被 npm 转成 `npm_config_<键名>` 环境变量，而后者优先级更高。
+  # 只设一组盖不住 .npmrc，所以两组都写。理由在 .npmrc 末尾也记了一遍。
+  # ---------------------------------------------------------------------------
+  ELECTRON_MIRROR: https://github.com/electron/electron/releases/download/
+  ELECTRON_BUILDER_BINARIES_MIRROR: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+  npm_config_electron_mirror: https://github.com/electron/electron/releases/download/
+  npm_config_electron_builder_binaries_mirror: https://github.com/electron-userland/electron-builder-binaries/releases/download/
+
+  # 没有买苹果的签名证书（为什么没买写在 §八 第 7 阶段）。
+  # 这里明确关掉「自动去钥匙串里找证书」：找不到时它会打印一大段警告，
+  # 看起来像出错，其实只是没有证书而已。关掉之后打包日志干净、意图明确。
+  CSC_IDENTITY_AUTO_DISCOVERY: false
+
+jobs:
+  build-mac:
+    name: 测试 → 打包 → 上传
+    # macos-latest 而不是钉死版本号（比如 macos-14）：
+    # 钉死的好处是结果稳定，坏处是 GitHub 哪天把那个镜像下线了，这里会**悄悄地不再出包**。
+    # 这个项目平时没人盯着，宁可跟着官方往前滚。
+    runs-on: macos-latest
+
+    steps:
+      - name: 取出源码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          # 与 Electron 44 内置的 Node、以及 package.json 里的 @types/node 24.x 对齐。
+          # 版本对不上时，类型检查会放行一些运行时不存在的写法（§四）。
+          node-version: '24'
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci
+
+      # ---------------------------------------------------------------------
+      # 先过测试关。放在打包**之前**，是为了让「测试没过」直接掐掉这一步之后的所有步骤 ——
+      # 出一版测试没过的安装包挂到下载页上，是比打包失败更糟的结果：
+      # 打包失败你会看见，坏包发出去了没人会告诉你。
+      # ---------------------------------------------------------------------
+      - name: 类型检查
+        run: npm run typecheck
+
+      - name: 自动化测试
+        run: npm test
+
+      - name: 打包 macOS 安装包
+        run: npm run build:mac
+
+      # ---------------------------------------------------------------------
+      # 打包产物自检。
+      #
+      # 为什么要有这一步：打包「成功」和「打出了一个能用的包」是两件事。这一步查不出
+      # 它在真 Mac 上装不装得上（**本机没有苹果电脑，这一点谁也没法在这里证明**），
+      # 但能挡住最蠢的一种情况：命令返回 0、release/ 里其实什么都没有，然后
+      # 上传那一步拿着一堆不存在的文件去传。
+      # ---------------------------------------------------------------------
+      - name: 检查打出来的文件
+        run: |
+          echo "=== release/ 里有什么 ==="
+          ls -lh release/ || true
+
+          # 用 nullglob + 数组来找 .dmg，而不用 `ls release/*.dmg`：
+          # 通配符没匹配到任何文件时，`ls` 会报错，而它的退出码会被管道吃掉 ——
+          # 那时「一个包都没打出来」这种情况反而不会让这一步失败。
+          # 这正是本项目最怕的那类事：检查看起来在跑，其实什么都没看住（§九）。
+          shopt -s nullglob
+          dmgs=(release/*.dmg)
+          shopt -u nullglob
+
+          count=${#dmgs[@]}
+          if [ "$count" -eq 0 ]; then
+            echo "::error::没有打出任何 .dmg 文件 —— 打包命令虽然返回成功，但没有产物"
+            exit 1
+          fi
+          if [ "$count" -gt 1 ]; then
+            echo "::error::打出了 $count 个 .dmg，分不清该传哪个（预期只有一个 universal 包）"
+            exit 1
+          fi
+
+          # 兜底的大小检查。一个 Electron 的 universal 包不可能只有几 MB ——
+          # 真出现一个几百 KB 的 .dmg，说明打包中途坏了，不该传到下载页上去。
+          size=$(stat -f%z "${dmgs[0]}")
+          echo "安装包大小：$size 字节"
+          if [ "$size" -lt 50000000 ]; then
+            echo "::error::安装包只有 $size 字节，小得不正常（universal 包应在 100 MB 以上），不传"
+            exit 1
+          fi
+
+      # 顺手存一份到本次运行的「产物」里。万一下面上传 Releases 失败，
+      # 这个包还能从这里下下来，不用重新打包等十分钟。
+      - name: 存一份打包产物
+        uses: actions/upload-artifact@v4
+        with:
+          name: HTJizhang-mac-dmg
+          path: release/*.dmg
+          retention-days: 30
+
+      - name: 传到 Releases
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # 推标签触发 → 用标签本身当版本号；手动点 → 用你填的那个。
+          # GitHub 上自带的 gh 命令，不用额外装东西。
+          RELEASE_TAG: ${{ github.event.inputs.tag || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          echo "目标版本：$RELEASE_TAG"
+
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "这个版本已经存在（比如 v1.0.0 上已经挂着 Windows 安装包），往它上面加附件"
+          else
+            echo "这个版本还不存在，先建一个"
+            gh release create "$RELEASE_TAG" \
+              --title "HT记账 $RELEASE_TAG" \
+              --generate-notes
+          fi
+
+          # --clobber：同名附件直接覆盖。
+          # 加上它是为了让这个流程可以**反复重跑** —— 打包失败重跑一次是很正常的操作，
+          # 不加的话第二次会死在「附件已存在」上。
+          gh release upload "$RELEASE_TAG" release/*.dmg --clobber
+
+          echo
+          echo "=== 上传后，这个版本下挂着哪些文件 ==="
+          gh release view "$RELEASE_TAG" --json assets \
+            --jq '.assets[] | "\(.name)  \(.size) 字节  \(.digest)"'

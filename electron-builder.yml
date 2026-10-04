@@ -3,8 +3,8 @@
 # 打包分两步：先把源码编译进 out/（npm run build），再由 electron-builder 把 out/
 # 和 Electron 运行时一起装进安装包。`npm run build:win` 把这两步连起来做。
 #
-# 产物在 release/ 下。Windows 出 NSIS 安装程序（.exe），macOS 出 .dmg（第 8 阶段，
-# 只能在苹果电脑或 GitHub 云端机器上跑）。
+# 产物在 release/ 下。Windows 出 NSIS 安装程序（.exe），macOS 出 .dmg。
+# macOS 那一份只能在苹果电脑或 GitHub 云端机器上打包，本地 Windows 造不出来（§四）。
 
 appId: com.ht0w0.htjizhang
 
@@ -65,6 +65,39 @@ nsis:
 # macOS（第 8 阶段）
 #
 # 只能在苹果电脑或 GitHub 云端 macOS 机器上跑，本地 Windows 出不了 .dmg。
-# 到第 8 阶段再写，届时还要定：是否出 universal（Intel + Apple 芯片合一个包）、
-# 应用分类、以及未签名情况下的「已损坏」处理说明。
+# 本机永远跑不到下面这一段 —— 改它的时候**没法在本机验证**，
+# 只能靠 GitHub 云端跑一次看结果（见 .github/workflows/build-mac.yml）。
 # ---------------------------------------------------------------------------
+mac:
+  target:
+    - target: dmg
+      # universal = Intel 芯片和苹果 M 系列芯片合在一个包里。
+      # 代价是包大一倍（两种 Electron 运行时都要装进去，约 200 MB），
+      # 好处是下载页上只有一个文件，用户不用先搞清自己是什么芯片。
+      # 对「下载它的任何一个人」来说，少一步选择比省 100 MB 重要（§一）。
+      arch: [universal]
+
+  # build/ 里只有 icon.png（1024）和 icon.ico，没有 .icns。
+  # electron-builder 会自己把这张 PNG 转成苹果要的 .icns，不用额外准备。
+  icon: build/icon.png
+
+  # Finder 里「显示简介 → 种类」那一栏显示成「财务」。不设就是一串内部编号。
+  category: public.app-category.finance
+
+  # 文件名用 ASCII、并且一眼能看出是给 Mac 的：
+  # Windows 那边叫 HTJizhang-1.0.0-setup.exe，这边叫 HTJizhang-1.0.0-mac.dmg。
+  artifactName: HTJizhang-${version}-mac.${ext}
+
+  # 不设 minimumSystemVersion：让它用 Electron 自带的那份。
+  # 自己填一个数字的话，填低了老系统会装上却打不开，填高了能装的人白白变少。
+
+dmg:
+  # 双击挂载后，访达左边显示的那个卷标用中文名（§5.7：中文名只用在用户看得见的地方）。
+  # 不设的话会显示成「HTJizhang 1.0.0」。
+  title: HT记账
+
+  # dmg 本身不签名。默认就是 false，这里写出来是为了让下一个人一眼看到它是有意为之。
+  sign: false
+
+  # 挂载后窗口里显示什么、图标摆在哪 —— 用 electron-builder 的默认布局：
+  # 左边程序图标、右边「应用程序」文件夹，拖过去就装好了。不自定义。
