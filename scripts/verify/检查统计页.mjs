@@ -530,6 +530,56 @@ async function main() {
       (await cdp.evaluate(`window.__T.count('stats-stale')`)) === 0
     )
 
+    // 上面那条只盯住了「稳定下来之后没有」。用户 2026-10-04 报的是另一种：
+    // **翻月的那一瞬间先闪一下「取不到 X 月的统计」，几十毫秒后才正常** ——
+    // 等页面稳定再 count，读的时候提示早没了，所以那条检查一直是绿的。
+    //
+    // 抓「一闪而过」只能用 MutationObserver：从装上到断开之间**只要出现过一次**
+    // 就记下来，不管它存在了多久。这是本项目第二条「检查一直在空转」的教训
+    // （第一条是 README 里 count/svg 那个）。
+    await cdp.evaluate(`(function () {
+      var main = document.querySelector('main')
+      window.__staleSeen = false
+      window.__staleMutations = 0
+      function scan() {
+        window.__staleMutations += 1
+        if (document.querySelector('[data-testid="stats-stale"]')) window.__staleSeen = true
+      }
+      window.__staleObserver = new MutationObserver(scan)
+      window.__staleObserver.observe(main, { childList: true, subtree: true, characterData: true })
+      scan()
+      return true
+    })()`)
+    await cdp.evaluate(`window.__T.click(window.__T.one('stats-prev-month'))`)
+    await waitStable(cdp)
+    await sleep(400)
+    const flash = await cdp.json(`(function () {
+      window.__staleObserver.disconnect()
+      return { seen: window.__staleSeen, mutations: window.__staleMutations }
+    })()`)
+    // 先确认观察器真的在看：若 mutations 是 0，下一条检查是**空转**的
+    // （它必然通过，因为什么都没观察到）。
+    check(
+      '翻月时观察器确实捕捉到了界面变化（否则下一条是空转的）',
+      flash.mutations > 0,
+      `观察到 ${flash.mutations} 次 DOM 变更`
+    )
+    check(
+      '翻月时不闪「取不到…的统计」（正在加载 ≠ 取不到）',
+      flash.seen === false,
+      `观察器期间出现过该提示：${flash.seen}`
+    )
+
+    // 翻回本月，后面的断言（饼图、排行、趋势）都按 2026-10 写。
+    await cdp.evaluate(`window.__T.click(window.__T.one('stats-this-month'))`)
+    await waitStable(cdp)
+    check(
+      '翻月再翻回本月，月份和数字都回来了',
+      (await cdp.evaluate(`window.__T.label('stats-month')`)) === '2026年10月' &&
+        (await cdp.evaluate(`window.__T.text('stats-card-expense')`)).indexOf('300.00') >= 0,
+      await cdp.evaluate(`window.__T.label('stats-month')`)
+    )
+
     // ---------- 2. 饼图 ----------
     const slices = await cdp.json(`window.__T.pieSlices()`)
     check('饼图真的画出来了（不是一片空白）', Array.isArray(slices) && slices.length > 0, `${slices?.length} 块`)

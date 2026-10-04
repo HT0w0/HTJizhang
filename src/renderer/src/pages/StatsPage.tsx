@@ -64,6 +64,10 @@ export default function StatsPage({ active }: { active: boolean }): JSX.Element 
 
     const id = ++requestId.current
     setLoading(true)
+    // 新的一次请求作废上一次的报错。不清的话，上一次失败留下的那句话会在
+    // 这一次请求飞在半空中时继续挂着 —— 又是一闪。清掉之后 error 的含义就唯一了：
+    // 「最近一次**已经结束**的请求失败了没有」，正好是 staleNotice 要的那个判据。
+    setError('')
 
     window.ht.stats
       .overview(month)
@@ -103,8 +107,20 @@ export default function StatsPage({ active }: { active: boolean }): JSX.Element 
   const labelMonth = overview?.month ?? shownMonth
   const monthLabel = labelMonth === '' ? '这个月' : formatMonthForDisplay(labelMonth)
 
-  /** 数据不是用户正在看的那个月时，把「下面显示的是几月」讲清楚。 */
-  const staleNotice = staleStatsNotice(overview?.month ?? '', shownMonth)
+  /**
+   * 数据不是用户正在看的那个月时，把「下面显示的是几月」讲清楚。
+   *
+   * ⚠️ `failed: error !== ''` 这个条件不能省（用户 2026-10-04 反馈的 bug 就出在这）。
+   * 光看「月份对不上」的话：用户点「‹」翻到 9 月的那一刻，`month` 这个 state 已经
+   * 变成 9 月、而数据要等几十毫秒才回来，中间 `overview.month` 还是 10 月 ——
+   * 于是**一条「取不到 9 月的统计」会闪一下再消失**。
+   * 那种时刻是「正在加载」，不是「取不到」。只有请求真的失败了才该说这句话。
+   */
+  const staleNotice = staleStatsNotice({
+    dataMonth: overview?.month ?? '',
+    shownMonth,
+    failed: error !== ''
+  })
 
   /**
    * 饼图和排行没有内容时说什么。两种情形必须分开 ——

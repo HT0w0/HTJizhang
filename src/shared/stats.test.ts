@@ -203,20 +203,28 @@ test('负的刻度也认（结余柱状图可能用到）', () => {
 // 取数失败时的说明文案
 // ---------------------------------------------------------------------------
 
-test('数据就是当前这个月时，什么都不说', () => {
-  expect(staleStatsNotice('2026-10', '2026-10')).toBe('')
+test('取数没失败就什么都不说', () => {
+  expect(staleStatsNotice({ dataMonth: '2026-10', shownMonth: '2026-10', failed: true })).toBe('')
 })
 
 test('翻到别的月份但取数失败时，说清下面显示的还是哪个月的数据', () => {
   // 这是本函数存在的唯一理由：翻到 9 月但取数失败时，界面若只换个标题、
   // 数字还是 10 月的，用户看到的是「9 月支出 300 元」—— 一个错月份的正确数字，
   // 当场看不出来。文案必须把「下面显示的是几月」说清楚。
-  const notice = staleStatsNotice('2026-10', '2026-09')
+  const notice = staleStatsNotice({ dataMonth: '2026-10', shownMonth: '2026-09', failed: true })
   expect(notice).toContain('2026年10月')
   expect(notice).toContain('2026年9月')
 })
 
+test('正在加载、只是月份还没跟上时**不能**说数据过期', () => {
+  // 这条是修「翻月时闪一下『取不到 X 月的数据』」留下的（用户 2026-10-04 反馈）。
+  // 点「‹」的那一刻月份 state 就已经变成 9 月了，数据要等几十毫秒才回来 ——
+  // 中间这段时间 overview.month 还是 10 月。光看「月份对不上」的话，
+  // 一条假提示就会闪出来再消失。所以判据里必须有「这次确实是失败了」。
+  expect(staleStatsNotice({ dataMonth: '2026-10', shownMonth: '2026-09', failed: false })).toBe('')
+})
+
 test('还没成功取到过任何数据时不解释（没得解释）', () => {
-  expect(staleStatsNotice('', '2026-09')).toBe('')
-  expect(staleStatsNotice('2026-10', '')).toBe('')
+  expect(staleStatsNotice({ dataMonth: '', shownMonth: '2026-09', failed: true })).toBe('')
+  expect(staleStatsNotice({ dataMonth: '2026-10', shownMonth: '', failed: true })).toBe('')
 })

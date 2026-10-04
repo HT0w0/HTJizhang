@@ -139,13 +139,37 @@ export function expenseChartHint(input: ExpenseChartHintInput): ChartEmptyHint {
  * 可 9 月其实一笔账都没有。**数字是真的、月份也是真的，凑在一起却是假的**，
  * 而屏幕上没有任何东西提示这一点（第 5 阶段独立复核抓到的就是这个）。
  *
- * 所以调用方要做两件事，缺一不可：
+ * 所以调用方要做三件事，缺一不可：
  *   1. 卡片和标题上的月份一律取**数据自己的月份**，不要取用户翻到的那个月；
- *   2. 把这里返回的这句话显示出来，让用户知道下面看的是哪个月的数。
+ *   2. 把这里返回的这句话显示出来，让用户知道下面看的是哪个月的数；
+ *   3. `failed` 只在**这次请求真的以失败告终**时才传 true（见下）。
  *
- * 返回空串表示「数据就是当前这个月的，没什么要说的」。
+ * 返回空串表示「没什么要说的」。
  */
-export function staleStatsNotice(dataMonth: string, shownMonth: string): string {
+export interface StaleStatsNoticeInput {
+  /** 界面上正显示着的数据属于哪个月。还没成功取到过任何数据时给空串。 */
+  readonly dataMonth: string
+  /** 用户正翻到哪个月。 */
+  readonly shownMonth: string
+  /** 这一次取数**确实失败了**没有。 */
+  readonly failed: boolean
+}
+
+/**
+ * ⚠️ `failed` 这个参数是**修一个真 bug 加上的**，不能省。
+ *
+ * 只看「月份对不上」是不够的 —— 用户点「‹」翻到 9 月的那一刻，月份 state 就已经
+ * 变成 9 月了，而数据要等几十毫秒才回来，中间这段时间 `overview.month` 还是 10 月。
+ * 此时**月份确实对不上，但这不是错误**：那是「正在加载」。
+ *
+ * 2026-10-04 用户报的原话：「每次切换统计时间时会有一瞬间显示取不到某时间的数据，
+ * 然后再正常显示」—— 就是这里漏了 `failed`，一条假提示闪了一下又被真实数据顶掉。
+ * 所以调用方传进来的必须是「这次请求以失败告终」，而不是「月份还没跟上」。
+ */
+export function staleStatsNotice(input: StaleStatsNoticeInput): string {
+  if (!input.failed) return ''
+
+  const { dataMonth, shownMonth } = input
   if (dataMonth === '' || shownMonth === '' || dataMonth === shownMonth) return ''
 
   return (
