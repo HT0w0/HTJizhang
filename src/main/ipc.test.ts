@@ -3,6 +3,7 @@ import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './db/migrations'
 import { seedBuiltinCategories } from './db/seed'
 import { categoryHandlers, transactionHandlers } from './ipc'
+import { TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
 function fresh(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -249,4 +250,110 @@ test('数据库关掉后，账单处理器也返回 ok:false 而不是把异常�
   const result = await h.recentCategoryIds()
   expect(result.ok).toBe(false)
   if (!result.ok) expect(result.message).toMatch(/[一-鿿]/)
+})
+
+// ---------------------------------------------------------------------------
+// 第 4 阶段：账单列表 / 编辑 / 删除 的通道与处理器
+// ---------------------------------------------------------------------------
+
+test('账单处理器暴露了 list / update / remove / months', () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  expect(typeof h.list).toBe('function')
+  expect(typeof h.update).toBe('function')
+  expect(typeof h.remove).toBe('function')
+  expect(typeof h.months).toBe('function')
+  db.close()
+})
+
+test('list 成功时返回 ok:true', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.list({ month: '2026-10', kind: 'all', keyword: '' })
+  expect(result.ok).toBe(true)
+  if (result.ok) expect(result.value).toEqual([])
+  db.close()
+})
+
+test('list 失败时返回 ok:false，消息是中文且不带 Electron 的英文前缀', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.list({ month: '瞎写的', kind: 'all', keyword: '' })
+  expect(result.ok).toBe(false)
+  if (!result.ok) {
+    expect(result.message).toMatch(/[一-鿿]/)
+    expect(result.message).not.toContain('Error invoking remote method')
+  }
+  db.close()
+})
+
+test('remove 删不存在的账单时返回中文错误，而不是把异常漏出去', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.remove(999999)
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toContain('这笔账不存在')
+  db.close()
+})
+
+test('update 改不存在的账单时返回中文错误', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.update({
+    id: 999999,
+    kind: 'expense',
+    amountFen: 100,
+    categoryId: idOf(db, 'expense/餐饮/午餐'),
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'wechat'
+  })
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toContain('这笔账不存在')
+  db.close()
+})
+
+test('months 成功时返回数组', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  const result = await h.months()
+  expect(result.ok).toBe(true)
+  if (result.ok) expect(result.value).toEqual([])
+  db.close()
+})
+
+test('数据库关掉后，list / update / remove / months 也是 ok:false 而不是漏异常', async () => {
+  const db = fresh()
+  const h = transactionHandlers(db)
+  db.close()
+
+  for (const result of [
+    await h.list({ month: '2026-10', kind: 'all', keyword: '' }),
+    await h.update({
+      id: 1,
+      kind: 'expense',
+      amountFen: 100,
+      categoryId: 1,
+      occurredOn: '2026-10-03',
+      note: '',
+      paymentMethod: 'wechat'
+    }),
+    await h.remove(1),
+    await h.months()
+  ]) {
+    expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.message).toMatch(/[一-鿿]/)
+  }
+})
+
+test('通道名和界面契约对得上（写错通道名不会报错，只会静默失效）', () => {
+  expect(TRANSACTION_CHANNELS.list).toBe('transactions:list')
+  expect(TRANSACTION_CHANNELS.update).toBe('transactions:update')
+  expect(TRANSACTION_CHANNELS.remove).toBe('transactions:remove')
+  expect(TRANSACTION_CHANNELS.months).toBe('transactions:months')
+})
+
+test('每个账单通道名都唯一（重复会让两个功能接到同一个处理器上）', () => {
+  const names = Object.values(TRANSACTION_CHANNELS)
+  expect(new Set(names).size).toBe(names.length)
 })

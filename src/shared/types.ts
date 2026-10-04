@@ -142,6 +142,14 @@ export interface TransactionsApi {
   recentCategoryIds(): Promise<number[]>
   /** 今天的本地日期串。由主进程给，避免界面自己算时用错时区（§5.2）。 */
   today(): Promise<string>
+  /** 按月查账单，可筛选、可搜索。 */
+  list(input: ListTransactionsInput): Promise<TransactionListItem[]>
+  /** 改一笔账。 */
+  update(input: UpdateTransactionInput): Promise<Transaction>
+  /** 删一笔账。删不掉（例如已经不存在）时抛中文错误。 */
+  remove(id: number): Promise<void>
+  /** 有账的月份，从新到旧。 */
+  months(): Promise<string[]>
 }
 
 export interface HtApi {

@@ -20,10 +20,20 @@ import type {
   CreateCategoryInput,
   CreateTransactionInput,
   IpcResult,
-  Transaction
+  ListTransactionsInput,
+  Transaction,
+  TransactionListItem,
+  UpdateTransactionInput
 } from '@shared/types'
 import { todayLocal } from '@shared/localDate'
-import { createTransaction, recentCategoryIds } from './db/transactions'
+import {
+  createTransaction,
+  deleteTransaction,
+  listTransactions,
+  monthsWithData,
+  recentCategoryIds,
+  updateTransaction
+} from './db/transactions'
 import {
   archiveCategory,
   createCategory,
@@ -111,6 +121,10 @@ export interface TransactionHandlers {
   create(input: CreateTransactionInput): Promise<IpcResult<Transaction>>
   recentCategoryIds(): Promise<IpcResult<number[]>>
   today(): Promise<IpcResult<string>>
+  list(input: ListTransactionsInput): Promise<IpcResult<TransactionListItem[]>>
+  update(input: UpdateTransactionInput): Promise<IpcResult<Transaction>>
+  remove(id: number): Promise<IpcResult<void>>
+  months(): Promise<IpcResult<string[]>>
 }
 
 /**
@@ -125,6 +139,10 @@ export function transactionHandlers(db: DatabaseSync): TransactionHandlers {
     recentCategoryIds: async () => guard(() => recentCategoryIds(db)),
     // 「今天」由主进程算，界面不自己算 —— 界面里算容易误用 UTC（CLAUDE.md §5.2），
     // 而这里与记账数据用的是同一套日期口径。
-    today: async () => guard(() => todayLocal())
+    today: async () => guard(() => todayLocal()),
+    list: async (input) => guard(() => listTransactions(db, input)),
+    update: async (input) => guard(() => updateTransaction(db, input)),
+    remove: async (id) => guard(() => deleteTransaction(db, id)),
+    months: async () => guard(() => monthsWithData(db))
   }
 }

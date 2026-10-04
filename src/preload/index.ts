@@ -4,7 +4,9 @@ import type {
   CreateCategoryInput,
   CreateTransactionInput,
   HtApi,
-  IpcResult
+  IpcResult,
+  ListTransactionsInput,
+  UpdateTransactionInput
 } from '@shared/types'
 import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
@@ -44,7 +46,11 @@ const api: HtApi = {
   transactions: {
     create: (input: CreateTransactionInput) => call(TRANSACTION_CHANNELS.create, input),
     recentCategoryIds: () => call(TRANSACTION_CHANNELS.recentCategoryIds),
-    today: () => call(TRANSACTION_CHANNELS.today)
+    today: () => call(TRANSACTION_CHANNELS.today),
+    list: (input: ListTransactionsInput) => call(TRANSACTION_CHANNELS.list, input),
+    update: (input: UpdateTransactionInput) => call(TRANSACTION_CHANNELS.update, input),
+    remove: (id: number) => call(TRANSACTION_CHANNELS.remove, id),
+    months: () => call(TRANSACTION_CHANNELS.months)
   }
 }
 
