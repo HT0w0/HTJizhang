@@ -7,7 +7,13 @@
  */
 import type { DatabaseSync } from 'node:sqlite'
 import { ipcMain } from 'electron'
-import type { CategoryKind, CreateCategoryInput, CreateTransactionInput } from '@shared/types'
+import type {
+  CategoryKind,
+  CreateCategoryInput,
+  CreateTransactionInput,
+  ListTransactionsInput,
+  UpdateTransactionInput
+} from '@shared/types'
 import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS, categoryHandlers, transactionHandlers } from './ipc'
 
 export function registerIpcHandlers(db: DatabaseSync): void {
@@ -35,4 +41,12 @@ export function registerIpcHandlers(db: DatabaseSync): void {
   )
   ipcMain.handle(TRANSACTION_CHANNELS.recentCategoryIds, () => t.recentCategoryIds())
   ipcMain.handle(TRANSACTION_CHANNELS.today, () => t.today())
+  ipcMain.handle(TRANSACTION_CHANNELS.list, (_event, input: ListTransactionsInput) =>
+    t.list(input)
+  )
+  ipcMain.handle(TRANSACTION_CHANNELS.update, (_event, input: UpdateTransactionInput) =>
+    t.update(input)
+  )
+  ipcMain.handle(TRANSACTION_CHANNELS.remove, (_event, id: number) => t.remove(id))
+  ipcMain.handle(TRANSACTION_CHANNELS.months, () => t.months())
 }

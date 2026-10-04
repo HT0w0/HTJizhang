@@ -33,7 +33,51 @@ export interface Transaction {
   readonly updatedAt: string
 }
 
+/**
+ * 账单列表里的一行：账单本身 + 它的分类信息。
+ *
+ * 为什么要把分类名一起带出来：列表每行都要显示「午餐」和它所属的「餐饮」，
+ * 如果只给 categoryId，界面就得自己拿分类树去查 —— 61 个小类逐个 find 一遍，
+ * 而且分类改名后列表里的旧行会跟着变，反而绕。数据库一次 JOIN 出来最省事。
+ */
+export interface TransactionListItem extends Transaction {
+  /** 二级小类名，如「午餐」 */
+  readonly categoryName: string
+  /**
+   * 这笔记账挂着的分类是不是已经归档（被用户「删除」）了。
+   *
+   * 列表**照常显示**归档分类下的历史账单（§5.11），编辑窗得让用户看到
+   * 原本是哪个分类，所以这个标记要一路带出来，界面上显示成「午餐（已删除）」。
+   */
+  readonly categoryArchived: boolean
+  /** 所属一级大类名，如「餐饮」 */
+  readonly majorName: string
+  /** 所属一级大类图标 */
+  readonly majorIcon: string
+}
+
 export interface CreateTransactionInput {
+  readonly kind: CategoryKind
+  readonly amountFen: number
+  readonly categoryId: number
+  readonly occurredOn: string
+  readonly note: string
+  readonly paymentMethod: PaymentMethod
+}
+
+/** 查账单列表的条件。三个条件之间是「并且」的关系。 */
+export interface ListTransactionsInput {
+  /** 'YYYY-MM'，只看这个月 */
+  readonly month: string
+  /** 'all' 表示收支都看 */
+  readonly kind: CategoryKind | 'all'
+  /** 关键词。空串表示不搜。搜备注、小类名、大类名三处。 */
+  readonly keyword: string
+}
+
+/** 改一笔账。id 指定改哪一笔，其余字段和新建时一样。 */
+export interface UpdateTransactionInput {
+  readonly id: number
   readonly kind: CategoryKind
   readonly amountFen: number
   readonly categoryId: number
@@ -105,6 +149,14 @@ export interface TransactionsApi {
   recentCategoryIds(): Promise<number[]>
   /** 今天的本地日期串。由主进程给，避免界面自己算时用错时区（§5.2）。 */
   today(): Promise<string>
+  /** 按月查账单，可筛选、可搜索。 */
+  list(input: ListTransactionsInput): Promise<TransactionListItem[]>
+  /** 改一笔账。 */
+  update(input: UpdateTransactionInput): Promise<Transaction>
+  /** 删一笔账。删不掉（例如已经不存在）时抛中文错误。 */
+  remove(id: number): Promise<void>
+  /** 有账的月份，从新到旧。 */
+  months(): Promise<string[]>
 }
 
 export interface HtApi {

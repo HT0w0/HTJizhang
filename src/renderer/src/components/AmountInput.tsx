@@ -13,6 +13,15 @@ interface AmountInputProps {
   readonly onEnter: () => void
   /** 是否显示成「有错」的样子 */
   readonly invalid: boolean
+  /**
+   * 测试标识。**必须全局唯一。**
+   *
+   * 四个页面是常驻挂载的（见 App.tsx），编辑弹窗和记账页会同时存在于文档里。
+   * 两边都叫 amount 的话，验证脚本 `querySelector('[data-testid="amount"]')`
+   * 抓到的是记账页那个（还是隐藏的），脚本会以为自己验证了弹窗。
+   * 记账页用默认值，弹窗传 `edit-amount`。
+   */
+  readonly testId?: string
 }
 
 /**
@@ -42,7 +51,7 @@ const PARTIAL_RE = /^\d*(?:,\d{0,3})*(?:\.\d{0,2})?$/
  * 光标由父组件在挂载和保存后重新聚焦，保证可以一直不碰鼠标。
  */
 const AmountInput = forwardRef<AmountInputHandle, AmountInputProps>(function AmountInput(
-  { value, onChange, onEnter, invalid },
+  { value, onChange, onEnter, invalid, testId = 'amount' },
   ref
 ): JSX.Element {
   const inputRef = useRef<HTMLInputElement>(null)
@@ -62,7 +71,7 @@ const AmountInput = forwardRef<AmountInputHandle, AmountInputProps>(function Amo
       <input
         ref={inputRef}
         value={value}
-        data-testid="amount"
+        data-testid={testId}
         aria-label="金额"
         inputMode="decimal"
         autoComplete="off"

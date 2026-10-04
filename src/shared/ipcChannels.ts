@@ -21,5 +21,9 @@ export const CATEGORY_CHANNELS = {
 export const TRANSACTION_CHANNELS = {
   create: 'transactions:create',
   recentCategoryIds: 'transactions:recentCategoryIds',
-  today: 'transactions:today'
+  today: 'transactions:today',
+  list: 'transactions:list',
+  update: 'transactions:update',
+  remove: 'transactions:remove',
+  months: 'transactions:months'
 } as const

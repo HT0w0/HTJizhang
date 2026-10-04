@@ -9,7 +9,11 @@ release/
 
 # 打包工具缓存
 .vite/
+.vitest/
 .electron-builder-cache/
+
+# 验证脚本的隔离数据目录（绝不指向用户账本，见 CLAUDE.md §九）
+.verify-data/
 
 # 日志与系统文件
 *.log
@@ -21,3 +25,6 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 .idea/
+
+# AI 执行计划的临时工作区
+.superpowers/

@@ -12,13 +12,20 @@
  * 用法：env -u ELECTRON_RUN_AS_NODE node e2e-task7-ui.mjs
  */
 import { spawn } from 'node:child_process'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 
 const PORT = 9222
-const PROJECT = 'D:\\Claude Code\\记账APP'
+const PROJECT = join(import.meta.dirname, '..', '..')
 const ELECTRON = join(PROJECT, 'node_modules', 'electron', 'dist', 'electron.exe')
-const USER_DATA = join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'HTJizhang')
+/**
+ * 数据目录：**不是**软件真实的数据目录。
+ *
+ * 用 --user-data-dir 把 Electron 的 userData 整个挪到项目下的临时目录 ——
+ * 这个脚本会在里面建分类、改名、归档，落在真实目录上就动了用户账本。
+ * 见 CLAUDE.md §九。
+ */
+const USER_DATA = join(PROJECT, '.verify-data', '分类管理界面')
 
 const results = []
 function check(name, pass, detail) {
@@ -106,9 +113,18 @@ class Cdp {
 async function main() {
   console.log('\n【第 2 阶段 设置页分类管理 — 界面客观验证】\n')
 
+  // 清空隔离目录，保证这次跑在干净的内置分类上（删的不是用户账本）。
+  rmSync(USER_DATA, { recursive: true, force: true })
+  mkdirSync(USER_DATA, { recursive: true })
+  console.log(`  · 隔离数据目录：${USER_DATA}\n`)
+
   const child = spawn(
     ELECTRON,
-    [join(PROJECT, 'out', 'main', 'index.js'), `--remote-debugging-port=${PORT}`],
+    [
+      join(PROJECT, 'out', 'main', 'index.js'),
+      `--user-data-dir=${USER_DATA}`,
+      `--remote-debugging-port=${PORT}`
+    ],
     {
       cwd: PROJECT,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },

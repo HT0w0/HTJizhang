@@ -10,13 +10,20 @@
  * 用法：env -u ELECTRON_RUN_AS_NODE node scripts/verify/检查记账页.mjs
  */
 import { spawn } from 'node:child_process'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
 
 const PORT = 9222
-const PROJECT = 'D:\\Claude Code\\记账APP'
+const PROJECT = join(import.meta.dirname, '..', '..')
 const ELECTRON = join(PROJECT, 'node_modules', 'electron', 'dist', 'electron.exe')
-const USER_DATA = join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'HTJizhang')
+/**
+ * 数据目录：**不是**软件真实的数据目录。
+ *
+ * 用 --user-data-dir 把 Electron 的 userData 整个挪到项目下的临时目录，
+ * 脚本清空的、读的、Electron 写的都是这里 —— 用户账本
+ * （%APPDATA%\HTJizhang）一根汗毛都不会动。见 CLAUDE.md §九。
+ */
+const USER_DATA = join(PROJECT, '.verify-data', '记账页')
 
 const results = []
 function check(name, pass, detail) {
@@ -108,7 +115,11 @@ class Cdp {
 async function launch() {
   const child = spawn(
     ELECTRON,
-    [join(PROJECT, 'out', 'main', 'index.js'), `--remote-debugging-port=${PORT}`],
+    [
+      join(PROJECT, 'out', 'main', 'index.js'),
+      `--user-data-dir=${USER_DATA}`,
+      `--remote-debugging-port=${PORT}`
+    ],
     {
       cwd: PROJECT,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
@@ -130,6 +141,11 @@ async function launch() {
 
 async function main() {
   console.log('\n【第 3 阶段 记一笔 — 界面客观验证】\n')
+
+  // 清掉上一次的残留（这个脚本假定自己是空库起跑的），在隔离目录里删，安全。
+  rmSync(USER_DATA, { recursive: true, force: true })
+  mkdirSync(USER_DATA, { recursive: true })
+  console.log(`  · 隔离数据目录：${USER_DATA}\n`)
 
   // 在主进程里取一次「今天」，后面多处要用同一个值。
   // 必须声明在 try 外面 —— 关掉应用后读数据库那一段还要用它。
