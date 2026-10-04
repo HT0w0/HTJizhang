@@ -15,14 +15,20 @@
  * 用法：env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查账单页.mjs"
  */
 import { spawn } from 'node:child_process'
+import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { homedir } from 'node:os'
-import { rmSync } from 'node:fs'
 
 const PORT = 9222
 const PROJECT = join(import.meta.dirname, '..', '..')
 const ELECTRON = join(PROJECT, 'node_modules', 'electron', 'dist', 'electron.exe')
-const USER_DATA = join(process.env.APPDATA ?? join(homedir(), 'AppData', 'Roaming'), 'HTJizhang')
+/**
+ * 数据目录：**不是**软件真实的数据目录。
+ *
+ * 用 --user-data-dir 把 Electron 的 userData 整个挪到项目下的临时目录 ——
+ * 这个脚本启动前会清空数据，落在真实目录上就会把用户账本清掉。
+ * 见 CLAUDE.md §九。
+ */
+const USER_DATA = join(PROJECT, '.verify-data', '账单页')
 
 const results = []
 function check(name, pass, detail) {
@@ -143,7 +149,11 @@ class Cdp {
 async function launch() {
   const child = spawn(
     ELECTRON,
-    [join(PROJECT, 'out', 'main', 'index.js'), `--remote-debugging-port=${PORT}`],
+    [
+      join(PROJECT, 'out', 'main', 'index.js'),
+      `--user-data-dir=${USER_DATA}`,
+      `--remote-debugging-port=${PORT}`
+    ],
     {
       cwd: PROJECT,
       env: { ...process.env, ELECTRON_RUN_AS_NODE: undefined },
@@ -203,11 +213,11 @@ async function snapshot(cdp) {
 async function main() {
   console.log('\n【第 4 阶段 账单列表 — 界面客观验证】\n')
 
-  // 清掉上一次残留，否则「首次打开」这类检查失去意义（scripts/verify/README.md）
-  for (const suffix of ['', '-wal', '-shm']) {
-    rmSync(join(USER_DATA, `ht-jizhang.db${suffix}`), { force: true })
-  }
-  console.log(`  · 已清空测试数据库：${join(USER_DATA, 'ht-jizhang.db')}\n`)
+  // 清掉上一次残留，否则「首次打开」这类检查失去意义（scripts/verify/README.md）。
+  // 清的是隔离目录，碰不到用户账本。
+  rmSync(USER_DATA, { recursive: true, force: true })
+  mkdirSync(USER_DATA, { recursive: true })
+  console.log(`  · 隔离数据目录（已清空）：${USER_DATA}\n`)
 
   let session = await launch()
   let { cdp } = session
