@@ -69,13 +69,28 @@ function normalizeNote(raw: string): string {
 }
 
 /**
- * 校验分类 id：必须存在、必须是二级小类、必须没被归档、收支类型必须一致。
+ * 校验分类 id：必须存在、必须是二级小类、收支类型必须一致，且没被归档
+ * ——**除非**它正是这笔记账原本就挂着的那个分类（`keepArchivedId`）。
  *
- * 这四条数据库的触发器都会再查一遍，但那里抛出的是底层错误，
- * 所以必须在进库之前用中文拦下来。四条分开判，是为了让提示各不相同——
+ * 为什么对「原样保留」开这个口子（用户 2026-10-04 拍板）：
+ * 归档一个分类时，它名下的历史账单**照常显示在列表里**（§5.11），用户点开想改个
+ * 错字，保存却报「所选的分类已被删除」——想改个备注都不行，除非把账挪到别的分类下，
+ * 而那等于顺手改掉了账目归属。列表显示归档分类、编辑却拒绝它，两处自相矛盾。
+ *
+ * 口子开得很窄：只有「这笔记账本来就在这个分类下」才放行。
+ * 换一个归档分类挂上来、或者新建一笔挂上去，照样拦下 —— 归档分类
+ * 不能再被**新**选中，这一条没变。
+ *
+ * 其余三条数据库的触发器都会再查一遍，但那里抛出的是底层错误，
+ * 所以必须在进库之前用中文拦下来。几条分开判，是为了让提示各不相同——
  * 「请选到更具体的小类」和「所选的分类已被删除」对用户来说是完全不同的两件事。
  */
-function validateCategory(db: DatabaseSync, categoryId: number, kind: CategoryKind): void {
+function validateCategory(
+  db: DatabaseSync,
+  categoryId: number,
+  kind: CategoryKind,
+  keepArchivedId?: number
+): void {
   if (!Number.isInteger(categoryId) || categoryId <= 0) {
     throw new Error('请先选择一个分类')
   }
@@ -85,7 +100,9 @@ function validateCategory(db: DatabaseSync, categoryId: number, kind: CategoryKi
     .get(categoryId) as { parent_id: number | null; kind: string; is_archived: number } | undefined
 
   if (!row) throw new Error('所选的分类不存在，可能已经被删除了')
-  if (row.is_archived === 1) throw new Error('所选的分类已被删除，请重新选一个')
+  if (row.is_archived === 1 && categoryId !== keepArchivedId) {
+    throw new Error('所选的分类已被删除，请重新选一个')
+  }
   if (row.parent_id === null) throw new Error('请选到更具体的小类，不能只选大类')
   if (row.kind !== kind) {
     throw new Error(kind === 'expense' ? '支出不能记在收入分类下' : '收入不能记在支出分类下')
@@ -107,7 +124,9 @@ function validateFields(
     readonly occurredOn: string
     readonly paymentMethod: PaymentMethod
     readonly note: string
-  }
+  },
+  /** 编辑时传这笔账原本的分类 id：它即使已归档也放行（见 validateCategory）。 */
+  keepArchivedId?: number
 ): string {
   // ---- 金额 ----
   if (!Number.isInteger(fields.amountFen)) {
@@ -118,7 +137,7 @@ function validateFields(
   }
 
   // ---- 分类 ----
-  validateCategory(db, fields.categoryId, fields.kind)
+  validateCategory(db, fields.categoryId, fields.kind, keepArchivedId)
 
   // ---- 日期 ----
   if (!isValidLocalDate(fields.occurredOn)) {
@@ -210,11 +229,13 @@ export function recentCategoryIds(db: DatabaseSync, limit = DEFAULT_RECENT_LIMIT
 const LIST_COLUMNS = `t.id, t.kind, t.amount_fen, t.category_id, t.occurred_on,
       t.note, t.payment_method, t.created_at, t.updated_at,
       c.name AS category_name,
+      c.is_archived AS category_archived,
       p.name AS major_name,
       p.icon AS major_icon`
 
 interface ListRow extends TransactionRow {
   category_name: string
+  category_archived: number
   major_name: string
   major_icon: string
 }
@@ -223,6 +244,9 @@ function toListItem(row: ListRow): TransactionListItem {
   return {
     ...toTransaction(row),
     categoryName: row.category_name,
+    // 界面要用它显示「午餐（已删除）」：编辑窗里得让用户看到这笔账原本在哪个分类下，
+    // 否则他只知道「保存不了」，却不知道原因，也认不出该不该重选。
+    categoryArchived: row.category_archived === 1,
     majorName: row.major_name,
     majorIcon: row.major_icon
   }
@@ -280,11 +304,14 @@ export function listTransactions(
 /** 改一笔账。走与新建完全相同的校验；任何一步失败都整笔回滚、原样不动。 */
 export function updateTransaction(db: DatabaseSync, input: UpdateTransactionInput): Transaction {
   return withTransaction(db, () => {
-    if (getTransaction(db, input.id) === undefined) {
+    const existing = getTransaction(db, input.id)
+    if (existing === undefined) {
       throw new Error('这笔账不存在，可能已经被删除了')
     }
 
-    const note = validateFields(db, input)
+    // 把原来的分类 id 传下去：它即使已被归档也放行，让用户能改金额/备注。
+    // 放行的只有「保持原样」，换成别的分类（哪怕也是归档的）照样要过校验。
+    const note = validateFields(db, input, existing.categoryId)
 
     db.prepare(
       `UPDATE transactions

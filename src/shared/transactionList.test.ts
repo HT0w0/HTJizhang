@@ -5,6 +5,8 @@ import {
   sumByKind,
   normalizeKeyword,
   escapeLikePattern,
+  summaryRows,
+  emptyHint,
   MAX_KEYWORD_LENGTH
 } from './transactionList'
 
@@ -27,6 +29,7 @@ function item(
     createdAt: '2026-10-04T00:00:00.000Z',
     updatedAt: '2026-10-04T00:00:00.000Z',
     categoryName,
+    categoryArchived: false,
     majorName,
     majorIcon: '🍜'
   }
@@ -150,4 +153,72 @@ test('escapeLikePattern 普通中文原样返回', () => {
 test('escapeLikePattern 里的 % 不再有通配符含义（这是这个函数存在的唯一理由）', () => {
   const pattern = escapeLikePattern('%')
   expect(pattern).not.toBe('%')
+})
+
+// ---------- 底部的合计该显示哪几项 ----------
+// 用户拍板的规则：「只看支出」时就只显示支出那一项。
+// 原来三项都显示，筛成支出时收入会显示 0.00 —— 明明这个月有收入，
+// 用户会读成「我这个月没有收入」。
+
+test('summaryRows 看「全部」时，支出、收入、结余三项都显示', () => {
+  const rows = summaryRows('all', { expenseFen: 21450, incomeFen: 800000, netFen: 778550 })
+  expect(rows.map((r) => r.label)).toEqual(['支出', '收入', '结余'])
+  expect(rows.map((r) => r.amountFen)).toEqual([21450, 800000, 778550])
+})
+
+test('summaryRows 筛「支出」时只显示支出，不显示收入和结余', () => {
+  const rows = summaryRows('expense', { expenseFen: 21450, incomeFen: 800000, netFen: 778550 })
+  expect(rows).toEqual([{ label: '支出', amountFen: 21450 }])
+})
+
+test('summaryRows 筛「收入」时只显示收入', () => {
+  const rows = summaryRows('income', { expenseFen: 21450, incomeFen: 800000, netFen: 778550 })
+  expect(rows).toEqual([{ label: '收入', amountFen: 800000 }])
+})
+
+test('summaryRows 筛出来的空月份显示 0.00，不是不显示', () => {
+  const rows = summaryRows('expense', { expenseFen: 0, incomeFen: 0, netFen: 0 })
+  expect(rows).toEqual([{ label: '支出', amountFen: 0 }])
+})
+
+// ---------- 空列表时该说什么 ----------
+// 原来只判断「有没有搜索词」，于是筛成「只看支出」而当月只有收入时，
+// 会说出「本月还没有记账」——和事实相反。
+
+test('emptyHint 有搜索词时说「没找到」', () => {
+  const hint = emptyHint('快餐', 'all', '2026年10月')
+  expect(hint.title).toBe('没有找到包含「快餐」的账单')
+})
+
+test('emptyHint 有搜索词时，即使同时有筛选也说「没找到」', () => {
+  const hint = emptyHint('快餐', 'expense', '2026年10月')
+  expect(hint.title).toBe('没有找到包含「快餐」的账单')
+})
+
+test('emptyHint 筛「支出」而没搜索时说「没有支出记录」，不说「还没有记账」', () => {
+  const hint = emptyHint('', 'expense', '2026年10月')
+  expect(hint.title).toBe('2026年10月没有支出记录')
+  expect(hint.title).not.toContain('还没有记账')
+})
+
+test('emptyHint 筛「收入」时说「没有收入记录」', () => {
+  const hint = emptyHint('', 'income', '2026年10月')
+  expect(hint.title).toBe('2026年10月没有收入记录')
+})
+
+test('emptyHint 什么都没筛、整月没账时才说「还没有记账」', () => {
+  const hint = emptyHint('', 'all', '2026年10月')
+  expect(hint.title).toBe('2026年10月还没有记账')
+})
+
+test('emptyHint 的月份文字由调用方给（本月可以传「这个月」）', () => {
+  expect(emptyHint('', 'all', '这个月').title).toBe('这个月还没有记账')
+})
+
+test('emptyHint 整月没账时给一句下一步该干什么', () => {
+  expect(emptyHint('', 'all', '2026年10月').hint).toContain('记一笔')
+})
+
+test('emptyHint 筛出来的空月份也给一句下一步（别让用户以为软件坏了）', () => {
+  expect(emptyHint('', 'expense', '2026年10月').hint).not.toBe('')
 })

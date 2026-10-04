@@ -269,9 +269,11 @@ async function main() {
         tx.d = await add('expense', 66, ids.dinner, otherDay, '折扣100%_优惠', 'cash')
         tx.e = await add('expense', 15, ids.dinner, prevMonth + '-10', '上个月的外卖', 'wechat')
 
+        var restaurant = tree.find(function (c) { return c.name === '餐饮' })
+
         return JSON.stringify({
           today: today, month: month, otherDay: otherDay, prevMonth: prevMonth,
-          ids: ids, tx: tx
+          ids: ids, tx: tx, lunchIcon: restaurant ? restaurant.icon : ''
         })
       })()
     `)
@@ -283,6 +285,7 @@ async function main() {
     prevMonth = seeded.prevMonth
     Object.assign(id, seeded.tx)
     const lunchId = seeded.ids.lunch
+    const lunchIcon = seeded.lunchIcon
 
     check('造好了 5 笔测试账（本月 4 笔、上月 1 笔）', Object.keys(id).length === 5, `本月 ${month}，今天 ${today}`)
 
@@ -319,13 +322,20 @@ async function main() {
     const rowOk = ['午餐', '餐饮', '公司楼下快餐', '支付宝'].every((w) => rowA.includes(w))
     check('一行里有：小类名、大类名、备注、支付方式', rowOk, rowA)
 
-    const noteEmptyRow = await cdp.evaluate(`
+    // ⚠️ 这条原来只断言「第一个子元素的文字不是空的」，是空转的：
+    // 真把图标那一段删掉，children[0] 会变成分类名（「午餐 餐饮」）仍然非空，
+    // 检查照样通过 —— 图标没了却报「通过」。改成比对真实的图标字符。
+    const rowIcon = await cdp.evaluate(`
       (function () {
         var el = window.__T.one('list-row-${id.a}')
-        return JSON.stringify({ icon: window.__T.label(el.children[0]) })
+        return window.__T.norm(el.children[0] && el.children[0].textContent)
       })()
     `)
-    check('一行里有大类图标', JSON.parse(noteEmptyRow).icon.length > 0, JSON.parse(noteEmptyRow).icon)
+    check(
+      '一行里有大类图标，而且就是「餐饮」的图标',
+      rowIcon === lunchIcon && lunchIcon !== '',
+      `行的第一个元素是「${rowIcon}」，餐饮的图标是「${lunchIcon}」`
+    )
 
     // ---------- 4. 金额的符号与颜色 ----------
     const amtA = await cdp.evaluate(`window.__T.text('list-amount-${id.a}')`)
@@ -351,6 +361,22 @@ async function main() {
     s = await snapshot(cdp)
     check('切到「支出」只剩 3 笔', s.total === '共 3 笔', s.total)
     check('切到「支出」后收入那笔不见了', !s.rowIds.includes(id.c), s.rowIds.join(','))
+
+    // 用户 2026-10-04 拍板：筛成支出时合计只显示支出那一项。
+    // 三项都显示的话收入会显示 0.00 —— 明明这个月有收入，用户会读成「我没有收入」。
+    const expenseSummary = await cdp.evaluate(`
+      JSON.stringify({
+        text: window.__T.label(window.__T.one('list-summary')),
+        rows: window.__T.byRe(/^list-sum-[^ ]+$/).map(function (e) { return e.dataset.testid.slice(9) })
+      })
+    `)
+    const es = JSON.parse(expenseSummary)
+    check(
+      '筛成「支出」时，合计里只有支出，没有收入 0.00 和结余',
+      es.rows.join(',') === '支出' && !es.text.includes('收入') && !es.text.includes('结余'),
+      `${es.rows.join('/')} —— ${es.text}`
+    )
+    check('筛成「支出」时的合计数字是这个月真实的支出 214.50', es.text.includes('214.50'), es.text)
 
     await cdp.evaluate(`window.__T.click(window.__T.one('list-filter-income'))`)
     await sleep(600)
@@ -591,6 +617,23 @@ async function main() {
     check('上个月那笔（15.00）在列表里', s.rowIds.length === 1 && s.rowIds[0] === id.e, s.rowIds.join(','))
     check('不是本月了，「回到本月」变回可点', s.thisMonthDisabled === false)
 
+    // 上个月只有支出、没有收入。筛成「收入」之后列表是空的，
+    // 这时的空状态**绝不能**说「本月还没有记账」——用户明明记过，只是筛掉了。
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-filter-income'))`)
+    await sleep(700)
+    s = await snapshot(cdp)
+    check(
+      '筛成「收入」而这个月只有支出时，空状态说的是「没有收入记录」，不是「还没有记账」',
+      s.empty.includes('没有收入记录') && !s.empty.includes('还没有记账'),
+      s.empty
+    )
+    check('这种空状态也给了一句下一步该干什么', s.empty.includes('记一笔'), s.empty)
+
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-filter-all'))`)
+    await sleep(700)
+    s = await snapshot(cdp)
+    check('切回「全部」后，上个月那笔又出现了', s.total === '共 1 笔', s.total)
+
     await cdp.evaluate(`window.__T.click(window.__T.one('list-this-month'))`)
     await sleep(700)
     s = await snapshot(cdp)
@@ -623,6 +666,56 @@ async function main() {
     await cdp.evaluate(`window.__T.click(window.__T.one('list-this-month'))`)
     await sleep(700)
 
+    // ---------- 15. 分类被「删除」之后，它名下的老账单还改得动吗 ----------
+    // 用户 2026-10-04 拍板：能改，分类保持原样。
+    // 归档的分类不出现在选择器里，所以编辑窗必须单独把「原来是哪个分类」告诉用户，
+    // 否则他只看到保存失败，既不知道原因，也认不出该不该重选。
+    await cdp.evaluate(`(async function () { await window.ht.categories.archive(${lunchId}) })()`)
+    await sleep(400)
+    // 让列表重新拉一次（切一下筛选就会触发）
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-filter-expense'))`)
+    await sleep(500)
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-filter-all'))`)
+    await sleep(700)
+
+    check(
+      '分类被删掉后，它名下的老账单照常留在列表里（不会凭空消失）',
+      (await cdp.evaluate(`!!window.__T.one('list-row-${id.a}')`)) === true
+    )
+
+    await cdp.evaluate(`window.__T.click(window.__T.one('list-row-${id.a}'))`)
+    await sleep(700)
+    const archivedNotice = await cdp.evaluate(`window.__T.label(window.__T.one('edit-archived-category'))`)
+    check(
+      '编辑窗里说清了原分类已被删除，并且说出是哪个分类',
+      archivedNotice.includes('午餐') && archivedNotice.includes('删除'),
+      archivedNotice || '（没有这条提示）'
+    )
+
+    await cdp.evaluate(`window.__T.setInput(window.__T.one('edit-amount'), '111.11')`)
+    await sleep(300)
+    await cdp.evaluate(`window.__T.click(window.__T.one('edit-save'))`)
+    await sleep(1200)
+
+    const sd = JSON.parse(
+      await cdp.evaluate(`
+        JSON.stringify({
+          closed: !window.__T.one('edit-dialog'),
+          amount: window.__T.text('list-amount-${id.a}'),
+          error: window.__T.label(window.__T.one('edit-error'))
+        })
+      `)
+    )
+    check(
+      '归档分类下的账单，不重选分类也能改（不用被迫把账挪到别的分类下）',
+      sd.closed === true && sd.amount !== null && sd.amount.includes('111.11'),
+      JSON.stringify(sd)
+    )
+
+    // 还原这个分类，免得影响后面「重开软件」那一段
+    await cdp.evaluate(`(async function () { await window.ht.categories.restore(${lunchId}) })()`)
+    await sleep(400)
+
     session.ws.close()
   } finally {
     session.child.kill()
@@ -638,7 +731,7 @@ async function main() {
     check('重开软件后，账单页还是 3 笔（改动真的落库了）', afterRestart.total === '共 3 笔', afterRestart.total)
 
     const persistedAmount = await cdp.evaluate(`window.__T.text('list-amount-${id.a}')`)
-    check('重开软件后，改过的 99.99 还在', persistedAmount.includes('99.99'), persistedAmount)
+    check('重开软件后，改过的 111.11 还在', persistedAmount.includes('111.11'), persistedAmount)
 
     const deletedGone = await cdp.evaluate(`!window.__T.one('list-row-${id.d}')`)
     check('重开软件后，删掉的那笔没有回来', deletedGone === true)

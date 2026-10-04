@@ -9,6 +9,7 @@ release/
 
 # 打包工具缓存
 .vite/
+.vitest/
 .electron-builder-cache/
 
 # 日志与系统文件

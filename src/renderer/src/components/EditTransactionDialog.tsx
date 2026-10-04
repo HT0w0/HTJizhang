@@ -168,6 +168,21 @@ export default function EditTransactionDialog({
           <div className="mt-4">
             <h3 className="mb-2 text-sm font-medium text-slate-500 dark:text-slate-400">分类</h3>
             {/*
+              这笔账挂着的分类已经被「删除」（归档）了。
+              归档的分类不会出现在下面的选择器里，所以必须在这里单独告诉用户
+              原来是什么——否则他只看到「保存失败」，既不知道原因，也认不出
+              该不该重选。只改金额/备注时保持原样就好（§5.11）。
+            */}
+            {item.categoryArchived && categoryId === item.categoryId && (
+              <p
+                data-testid="edit-archived-category"
+                className="mb-2 rounded-lg bg-amber-50 px-3 py-2 text-xs leading-relaxed text-amber-700 dark:bg-amber-950 dark:text-amber-300"
+              >
+                这笔账原来记在「{item.categoryName}」下，这个分类已经被删除了。
+                保持原样的话，它仍然记在这个分类下；也可以在下面另选一个。
+              </p>
+            )}
+            {/*
               CategoryPicker 内部的 data-testid 是 pick- 前缀，与记账页重名。
               验证脚本必须先定位到 [data-testid="edit-dialog"] 再在子树里找。
             */}

@@ -4,7 +4,10 @@
  * 不碰数据库、不碰 React（CLAUDE.md §5.15），所以可以直接单测 ——
  * 这里算错的话，用户看到的是「当天的小计和明细对不上」，而且不会报任何错。
  */
-import type { TransactionListItem } from './types'
+import type { CategoryKind, TransactionListItem } from './types'
+
+/** 列表页的筛选状态：只看支出 / 只看收入 / 都看。没有选中的月份也是一样的意思。 */
+export type KindFilter = CategoryKind | 'all'
 
 /** 搜索关键词的长度上限。超长的关键词没有意义，还会让 SQL 变慢。 */
 export const MAX_KEYWORD_LENGTH = 100
@@ -61,6 +64,69 @@ export function sumByKind(items: readonly TransactionListItem[]): {
     else incomeFen += item.amountFen
   }
   return { expenseFen, incomeFen, netFen: incomeFen - expenseFen }
+}
+
+/** 底部合计里的一行。 */
+export interface SummaryRow {
+  readonly label: '支出' | '收入' | '结余'
+  readonly amountFen: number
+}
+
+/**
+ * 底部合计该显示哪几项。
+ *
+ * 筛成「只看支出」时**只显示支出那一项**（用户 2026-10-04 拍板）。
+ * 三项都显示的话，收入会显示 0.00 —— 明明这个月有收入，
+ * 用户会读成「我这个月没有收入」，比不显示更糟。
+ *
+ * 为什么单独抽成一个函数：这是纯逻辑，放这里能直接单测（§5.15）；
+ * 写在 JSX 里就只能靠界面验证脚本去点，测得慢也测不全。
+ */
+export function summaryRows(
+  kind: KindFilter,
+  totals: { readonly expenseFen: number; readonly incomeFen: number; readonly netFen: number }
+): SummaryRow[] {
+  if (kind === 'expense') return [{ label: '支出', amountFen: totals.expenseFen }]
+  if (kind === 'income') return [{ label: '收入', amountFen: totals.incomeFen }]
+  return [
+    { label: '支出', amountFen: totals.expenseFen },
+    { label: '收入', amountFen: totals.incomeFen },
+    { label: '结余', amountFen: totals.netFen }
+  ]
+}
+
+/** 列表为空时该显示的两行字。hint 为空串表示不显示第二行。 */
+export interface EmptyHint {
+  readonly title: string
+  readonly hint: string
+}
+
+/**
+ * 列表空了该说什么。
+ *
+ * 为什么要分三种情形：原来是「有没有搜索词」一刀切，于是筛成「只看支出」
+ * 而当月只有收入时，会说出「本月还没有记账」——**和事实相反**。
+ * 用户明明记过账，软件却说他没记，比一片空白更让人怀疑软件坏了。
+ *
+ * monthLabel 由调用方给：本月可以传「这个月」，比「2026年10月」更像人话。
+ */
+export function emptyHint(keyword: string, kind: KindFilter, monthLabel: string): EmptyHint {
+  if (keyword !== '') {
+    return { title: `没有找到包含「${keyword}」的账单`, hint: '' }
+  }
+  if (kind === 'expense') {
+    return {
+      title: `${monthLabel}没有支出记录`,
+      hint: '换个筛选看看，或去「记一笔」记下第一笔吧'
+    }
+  }
+  if (kind === 'income') {
+    return {
+      title: `${monthLabel}没有收入记录`,
+      hint: '换个筛选看看，或去「记一笔」记下第一笔吧'
+    }
+  }
+  return { title: `${monthLabel}还没有记账`, hint: '去「记一笔」记下第一笔吧' }
 }
 
 /**

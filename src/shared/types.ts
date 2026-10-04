@@ -43,6 +43,13 @@ export interface Transaction {
 export interface TransactionListItem extends Transaction {
   /** 二级小类名，如「午餐」 */
   readonly categoryName: string
+  /**
+   * 这笔记账挂着的分类是不是已经归档（被用户「删除」）了。
+   *
+   * 列表**照常显示**归档分类下的历史账单（§5.11），编辑窗得让用户看到
+   * 原本是哪个分类，所以这个标记要一路带出来，界面上显示成「午餐（已删除）」。
+   */
+  readonly categoryArchived: boolean
   /** 所属一级大类名，如「餐饮」 */
   readonly majorName: string
   /** 所属一级大类图标 */

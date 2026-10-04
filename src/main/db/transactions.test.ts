@@ -738,3 +738,136 @@ test('monthsWithData 删光之后，那个月就不在列表里了', () => {
   expect(monthsWithData(db)).toEqual(['2026-11'])
   db.close()
 })
+
+// ---------- 归档分类下的老账单还能不能改 ----------
+// 用户 2026-10-04 拍板：能改，分类保持原样。
+//
+// 为什么必须改：归档一个分类时它名下的历史账单**照常显示在列表里**（§5.11），
+// 用户点开想改个备注，保存却报「所选的分类已被删除」——想改个错字都不行，
+// 而且弹窗里看不到原来是什么分类。列表和编辑对归档的态度自相矛盾。
+
+test('分类归档后，原来挂在它下面的那笔账，只改金额和备注仍然存得进去', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  const id = spend(db, '2026-10-03', '公司楼下快餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  const updated = updateTransaction(db, {
+    id,
+    kind: 'expense',
+    amountFen: 3250,
+    categoryId: lunch, // 还是那个已归档的分类
+    occurredOn: '2026-10-03',
+    note: '涨价了',
+    paymentMethod: 'alipay'
+  })
+
+  expect(updated.amountFen).toBe(3250)
+  expect(updated.note).toBe('涨价了')
+  expect(updated.categoryId).toBe(lunch)
+  db.close()
+})
+
+test('归档分类下的账，改的时候仍然可以换成别的分类', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  const id = spend(db, '2026-10-03', '公司楼下快餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  const moved = updateTransaction(db, {
+    id,
+    kind: 'expense',
+    amountFen: 1000,
+    categoryId: idOf(db, 'expense/餐饮/晚餐'),
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'wechat'
+  })
+
+  expect(moved.categoryId).toBe(idOf(db, 'expense/餐饮/晚餐'))
+  db.close()
+})
+
+test('不能把别的账改成挂到一个归档分类下（放行的只是「原样保留」）', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  const other = spend(db, '2026-10-03', '别的账', 'expense/餐饮/晚餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  let message = ''
+  try {
+    updateTransaction(db, {
+      id: other,
+      kind: 'expense',
+      amountFen: 1000,
+      categoryId: lunch, // 原来挂的不是它
+      occurredOn: '2026-10-03',
+      note: '',
+      paymentMethod: 'wechat'
+    })
+  } catch (e) {
+    message = (e as Error).message
+  }
+  expect(message).toContain('分类')
+  db.close()
+})
+
+test('归档分类下的账，不能改成收支类型和该分类不符（放行不等于连类型都不管了）', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  const id = spend(db, '2026-10-03', '公司楼下快餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  let message = ''
+  try {
+    updateTransaction(db, {
+      id,
+      kind: 'income', // 午餐是支出分类
+      amountFen: 1000,
+      categoryId: lunch,
+      occurredOn: '2026-10-03',
+      note: '',
+      paymentMethod: 'wechat'
+    })
+  } catch (e) {
+    message = (e as Error).message
+  }
+  expect(message).toContain('收入不能记在支出分类下')
+  db.close()
+})
+
+test('新建一笔账仍然不能挂到归档分类上（编辑的放行只针对「保持原样」）', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  let message = ''
+  try {
+    createTransaction(db, { ...valid(db), categoryId: lunch })
+  } catch (e) {
+    message = (e as Error).message
+  }
+  expect(message).toContain('分类')
+  db.close()
+})
+
+test('列表里带出这笔记在哪个已归档的分类下（界面要显示「午餐（已删除）」）', () => {
+  const db = fresh()
+  const lunch = idOf(db, 'expense/餐饮/午餐')
+  spend(db, '2026-10-03', '公司楼下快餐')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(lunch)
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows).toHaveLength(1)
+  expect(rows[0].categoryName).toBe('午餐')
+  expect(rows[0].categoryArchived).toBe(true)
+  db.close()
+})
+
+test('没归档的分类，列表里标着「没归档」', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '公司楼下快餐')
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows[0].categoryArchived).toBe(false)
+  db.close()
+})

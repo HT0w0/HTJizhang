@@ -1,15 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import type { JSX } from 'react'
-import type { CategoryKind, TransactionListItem } from '@shared/types'
+import type { TransactionListItem } from '@shared/types'
 import { formatMonthForDisplay, shiftMonth } from '@shared/month'
 import { formatLocalDateForDisplay, localDateWeekday } from '@shared/localDate'
 import { formatYuan } from '@shared/money'
-import { groupByDay, sumByKind } from '@shared/transactionList'
+import { emptyHint, groupByDay, sumByKind, summaryRows } from '@shared/transactionList'
+import type { KindFilter } from '@shared/transactionList'
 import MonthSwitcher from '../components/MonthSwitcher'
 import TransactionRow from '../components/TransactionRow'
 import EditTransactionDialog from '../components/EditTransactionDialog'
-
-type KindFilter = CategoryKind | 'all'
 
 const KIND_FILTERS: ReadonlyArray<{ readonly value: KindFilter; readonly label: string }> = [
   { value: 'all', label: '全部' },
@@ -92,6 +91,12 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
   const groups = groupByDay(items)
   const totals = sumByKind(items)
   const shownMonth = month === '' ? thisMonth : month
+  const sums = summaryRows(kind, totals)
+  /**
+   * 列表为空时说什么。三种情形不同 —— 尤其是筛成「只看支出」而当月只有收入时，
+   * 绝不能说出「本月还没有记账」（用户明明记过），见 shared/transactionList.ts。
+   */
+  const empty = emptyHint(keyword, kind, shownMonth === '' ? '这个月' : formatMonthForDisplay(shownMonth))
 
   return (
     <section>
@@ -152,15 +157,18 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
         </p>
       )}
 
-      {!loading && items.length === 0 && (
+      {/*
+        error === '' 不能省：查询失败时 items 也是空的，
+        不加这一条会同时显示「程序内部出错了」和「本月还没有记账」，
+        后者是假的 —— 我们根本不知道这个月有没有账。
+      */}
+      {!loading && error === '' && items.length === 0 && (
         <p data-testid="list-empty" className="mt-16 text-center text-sm text-slate-500 dark:text-slate-400">
-          {keyword !== ''
-            ? `没有找到包含「${keyword}」的账单`
-            : `${shownMonth === '' ? '这个月' : formatMonthForDisplay(shownMonth)}还没有记账`}
-          {keyword === '' && (
+          {empty.title}
+          {empty.hint !== '' && (
             <>
               <br />
-              <span className="text-xs text-slate-400">去「记一笔」记下第一笔吧</span>
+              <span className="text-xs text-slate-400">{empty.hint}</span>
             </>
           )}
         </p>
@@ -194,30 +202,25 @@ export default function ListPage({ active }: { active: boolean }): JSX.Element {
             data-testid="list-summary"
             className="mt-6 flex justify-end gap-6 border-t border-slate-200 pt-3 text-sm dark:border-slate-700"
           >
-            <span className="text-slate-500 dark:text-slate-400">
-              支出{' '}
-              <span className="font-medium tabular-nums text-red-600 dark:text-red-400">
-                {formatYuan(totals.expenseFen)}
+            {sums.map((row) => (
+              <span key={row.label} className="text-slate-500 dark:text-slate-400">
+                {row.label}{' '}
+                <span
+                  data-testid={`list-sum-${row.label}`}
+                  className={`font-medium tabular-nums ${
+                    row.label === '支出'
+                      ? 'text-red-600 dark:text-red-400'
+                      : row.label === '收入'
+                        ? 'text-green-600 dark:text-green-400'
+                        : row.amountFen < 0
+                          ? 'text-red-600 dark:text-red-400'
+                          : 'text-slate-700 dark:text-slate-200'
+                  }`}
+                >
+                  {formatYuan(row.amountFen)}
+                </span>
               </span>
-            </span>
-            <span className="text-slate-500 dark:text-slate-400">
-              收入{' '}
-              <span className="font-medium tabular-nums text-green-600 dark:text-green-400">
-                {formatYuan(totals.incomeFen)}
-              </span>
-            </span>
-            <span className="text-slate-500 dark:text-slate-400">
-              结余{' '}
-              <span
-                className={`font-medium tabular-nums ${
-                  totals.netFen < 0
-                    ? 'text-red-600 dark:text-red-400'
-                    : 'text-slate-700 dark:text-slate-200'
-                }`}
-              >
-                {formatYuan(totals.netFen)}
-              </span>
-            </span>
+            ))}
           </div>
         </>
       )}
