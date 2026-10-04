@@ -36,3 +36,13 @@ Thumbs.db
 # 图标候选图（scripts/make-icons.mjs 生成，给用户挑选用的一次性产物）。
 # 选定之后那个图形会进 build/icon.png，由 electron-builder 用作程序图标。
 图标方案/
+
+# ⚠️ 只留在本机、不随公开仓库发布的三类内部文件（2026-10-04 用户拍板）。
+# 项目宪法、开发记录、AI 施工计划 —— 里面有大段内部推演和所有者的个人信息。
+# 它们仍在磁盘上（Claude Code 照样会读 CLAUDE.md，规则不受影响），只是不进这个仓库。
+# 完整历史另存于本机的「备份-未改写历史」分支（该分支永不推送）。
+# 注意：`.gitignore` 只管「以后」——已经提交过的内容靠 gitignore 是抹不掉的，
+# 这几份文件的历史是用 git filter-branch 重写掉的，见 docs/…（文档已不公开）。
+CLAUDE.md
+docs/开发记录.md
+docs/superpowers/
