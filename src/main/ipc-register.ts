@@ -14,7 +14,14 @@ import type {
   ListTransactionsInput,
   UpdateTransactionInput
 } from '@shared/types'
-import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS, categoryHandlers, transactionHandlers } from './ipc'
+import {
+  CATEGORY_CHANNELS,
+  STATS_CHANNELS,
+  TRANSACTION_CHANNELS,
+  categoryHandlers,
+  statsHandlers,
+  transactionHandlers
+} from './ipc'
 
 export function registerIpcHandlers(db: DatabaseSync): void {
   const h = categoryHandlers(db)
@@ -49,4 +56,8 @@ export function registerIpcHandlers(db: DatabaseSync): void {
   )
   ipcMain.handle(TRANSACTION_CHANNELS.remove, (_event, id: number) => t.remove(id))
   ipcMain.handle(TRANSACTION_CHANNELS.months, () => t.months())
+
+  const s = statsHandlers(db)
+
+  ipcMain.handle(STATS_CHANNELS.overview, (_event, month: string) => s.overview(month))
 }

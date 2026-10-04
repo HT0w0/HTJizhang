@@ -8,6 +8,15 @@ interface MonthSwitcherProps {
   readonly onPrev: () => void
   readonly onNext: () => void
   readonly onThisMonth: () => void
+  /**
+   * 测试标识前缀，默认 'list'（账单页）。
+   *
+   * 统计页有自己的月份，而且**与账单页互不影响**，两个切换器会同时存在于
+   * 文档里（四个页面常驻挂载）。标识重名的话验证脚本的 querySelector 会
+   * 抓到另一个页面的元素，检查「通过」了但其实什么都没看（CLAUDE.md §七）。
+   * 统计页传 'stats'。
+   */
+  readonly testIdPrefix?: string
 }
 
 /**
@@ -25,7 +34,8 @@ export default function MonthSwitcher({
   isCurrent,
   onPrev,
   onNext,
-  onThisMonth
+  onThisMonth,
+  testIdPrefix = 'list'
 }: MonthSwitcherProps): JSX.Element {
   const arrow =
     'rounded-lg border border-slate-300 px-2.5 py-1.5 text-sm transition-colors hover:bg-slate-100 dark:border-slate-600 dark:hover:bg-slate-700'
@@ -34,7 +44,7 @@ export default function MonthSwitcher({
     <div className="flex items-center gap-2">
       <button
         type="button"
-        data-testid="list-prev-month"
+        data-testid={`${testIdPrefix}-prev-month`}
         aria-label="上一个月"
         onClick={onPrev}
         className={arrow}
@@ -42,14 +52,14 @@ export default function MonthSwitcher({
         ‹
       </button>
       <span
-        data-testid="list-month"
+        data-testid={`${testIdPrefix}-month`}
         className="min-w-32 text-center text-base font-medium tabular-nums"
       >
         {formatMonthForDisplay(month)}
       </span>
       <button
         type="button"
-        data-testid="list-next-month"
+        data-testid={`${testIdPrefix}-next-month`}
         aria-label="下一个月"
         onClick={onNext}
         className={arrow}
@@ -58,7 +68,7 @@ export default function MonthSwitcher({
       </button>
       <button
         type="button"
-        data-testid="list-this-month"
+        data-testid={`${testIdPrefix}-this-month`}
         disabled={isCurrent}
         onClick={onThisMonth}
         className="rounded-lg px-3 py-1.5 text-sm text-blue-600 transition-colors hover:bg-blue-50 disabled:opacity-40 dark:text-blue-400 dark:hover:bg-blue-950"

@@ -27,3 +27,7 @@ export const TRANSACTION_CHANNELS = {
   remove: 'transactions:remove',
   months: 'transactions:months'
 } as const
+
+export const STATS_CHANNELS = {
+  overview: 'stats:overview'
+} as const

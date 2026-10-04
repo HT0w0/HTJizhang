@@ -15,7 +15,24 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 
-const PORT = 9222
+/**
+ * 调试端口：本脚本从 BASE_PORT 起，每次启动 Electron 往后挪一个。
+ *
+ * 五个脚本原先都用 9222，串起来跑会撞：前一个实例刚被 kill，Windows 上
+ * 子进程要过一会儿才真消失，新实例**照样**打印「DevTools listening on 9222」
+ * 并成功启动 —— 两个进程共存，于是 /json/list 这次答的是谁完全不确定。
+ * 实测出现过一次无规律的 95/96，单独重跑 9 遍都复现不出来。
+ *
+ * 每个脚本用一段互不相同的端口，脚本内每次重启再 +1，从根上避开这件事。
+ * 起始端口别和别的脚本重复（9222 / 9232 / 9242 / 9252 / 9262）。
+ */
+const BASE_PORT = 9232
+let portSeq = 0
+
+/** 取下一个调试端口。每次启动 Electron 都用一个新的。 */
+function nextPort() {
+  return BASE_PORT + portSeq++
+}
 const PROJECT = join(import.meta.dirname, '..', '..')
 const ELECTRON = join(PROJECT, 'node_modules', 'electron', 'dist', 'electron.exe')
 /**
@@ -62,10 +79,10 @@ window.__T = {
 'ok'
 `
 
-async function getTarget() {
+async function getTarget(port) {
   for (let i = 0; i < 60; i += 1) {
     try {
-      const res = await fetch(`http://localhost:${PORT}/json/list`)
+      const res = await fetch(`http://localhost:${port}/json/list`)
       const list = await res.json()
       const page = list.find((t) => t.type === 'page' && t.webSocketDebuggerUrl)
       if (page) return page
@@ -118,12 +135,13 @@ async function main() {
   mkdirSync(USER_DATA, { recursive: true })
   console.log(`  · 隔离数据目录：${USER_DATA}\n`)
 
+  const port = nextPort()
   const child = spawn(
     ELECTRON,
     [
       join(PROJECT, 'out', 'main', 'index.js'),
       `--user-data-dir=${USER_DATA}`,
-      `--remote-debugging-port=${PORT}`
+      `--remote-debugging-port=${port}`
     ],
     {
       cwd: PROJECT,
@@ -137,7 +155,7 @@ async function main() {
   })
 
   try {
-    const target = await getTarget()
+    const target = await getTarget(port)
     const ws = new WebSocket(target.webSocketDebuggerUrl)
     await new Promise((resolve, reject) => {
       ws.addEventListener('open', resolve)

@@ -169,4 +169,56 @@ export interface HtApi {
   }
   readonly categories: CategoriesApi
   readonly transactions: TransactionsApi
+  readonly stats: StatsApi
+}
+
+// ---------------------------------------------------------------------------
+// 统计
+// ---------------------------------------------------------------------------
+
+/** 一个分类（大类或小类）在某个时间段里的合计金额。 */
+export interface CategoryAmount {
+  readonly categoryId: number
+  readonly name: string
+  readonly amountFen: number
+}
+
+/** 饼图和排行用的大类数据。children 是它名下小类的合计，用于点开下钻。 */
+export interface MajorAmount extends CategoryAmount {
+  readonly icon: string
+  readonly children: readonly CategoryAmount[]
+}
+
+/** 趋势图上的一根柱子对：某个月的支出与收入。没有账的月份是 0，不是缺一格。 */
+export interface TrendPoint {
+  /** 'YYYY-MM' */
+  readonly month: string
+  readonly expenseFen: number
+  readonly incomeFen: number
+}
+
+/**
+ * 统计页一次要的全部数据。
+ *
+ * 做成**一次取回**而不是每张图各调一次：数字卡片、饼图、排行、趋势图
+ * 用的都是同一个月的同一批账单，分四次取的话，四次之间用户刚好记了一笔，
+ * 卡片上写 100 元、饼图加起来 120 元 —— 数字对不上，而且**当场看不出来**。
+ */
+export interface StatsOverview {
+  readonly month: string
+  readonly expenseFen: number
+  readonly incomeFen: number
+  /** 结余 = 收入 − 支出，可以是负数。 */
+  readonly netFen: number
+  /** 这个月一共几笔账（支出 + 收入）。用来分辨「没记账」和「只记了收入」。 */
+  readonly count: number
+  /** 支出按大类汇总，金额从大到小。 */
+  readonly majors: readonly MajorAmount[]
+  /** 最近 12 个月，从旧到新，最后一个是 month。 */
+  readonly trend: readonly TrendPoint[]
+}
+
+export interface StatsApi {
+  /** 取某个月的统计总览。 */
+  overview(month: string): Promise<StatsOverview>
 }

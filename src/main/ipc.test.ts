@@ -2,8 +2,8 @@ import { test, expect } from 'vitest'
 import { DatabaseSync } from 'node:sqlite'
 import { migrate } from './db/migrations'
 import { seedBuiltinCategories } from './db/seed'
-import { categoryHandlers, transactionHandlers } from './ipc'
-import { TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+import { categoryHandlers, statsHandlers, transactionHandlers } from './ipc'
+import { CATEGORY_CHANNELS, STATS_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
 function fresh(): DatabaseSync {
   const db = new DatabaseSync(':memory:')
@@ -356,4 +356,94 @@ test('通道名和界面契约对得上（写错通道名不会报错，只会�
 test('每个账单通道名都唯一（重复会让两个功能接到同一个处理器上）', () => {
   const names = Object.values(TRANSACTION_CHANNELS)
   expect(new Set(names).size).toBe(names.length)
+})
+
+// ---------------------------------------------------------------------------
+// 统计
+// ---------------------------------------------------------------------------
+
+test('统计页取数走通：这个月没记账时也给得出结果，不是报错', async () => {
+  const db = fresh()
+  const h = statsHandlers(db)
+
+  const result = await h.overview('2026-10')
+  expect(result.ok).toBe(true)
+  if (result.ok) {
+    expect(result.value.month).toBe('2026-10')
+    expect(result.value.expenseFen).toBe(0)
+    expect(result.value.incomeFen).toBe(0)
+    expect(result.value.majors).toEqual([])
+    // 趋势图即使一笔账都没有也要给满 12 个月 —— 否则横轴是空的，用户以为图坏了
+    expect(result.value.trend).toHaveLength(12)
+  }
+  db.close()
+})
+
+test('统计的数字和刚记的账对得上（界面拿到的是同一批账算出来的）', async () => {
+  const db = fresh()
+  const t = transactionHandlers(db)
+  await t.create({
+    kind: 'expense',
+    amountFen: 2850,
+    categoryId: idOf(db, 'expense/餐饮/午餐'),
+    occurredOn: '2026-10-03',
+    note: '午饭',
+    paymentMethod: 'wechat'
+  })
+  await t.create({
+    kind: 'income',
+    amountFen: 800000,
+    categoryId: idOf(db, 'income/工资薪酬/月薪'),
+    occurredOn: '2026-10-05',
+    note: '',
+    paymentMethod: 'bank'
+  })
+
+  const result = await statsHandlers(db).overview('2026-10')
+  expect(result.ok).toBe(true)
+  if (result.ok) {
+    expect(result.value.expenseFen).toBe(2850)
+    expect(result.value.incomeFen).toBe(800000)
+    expect(result.value.netFen).toBe(797150)
+    expect(result.value.count).toBe(2)
+    expect(result.value.majors.map((m) => m.name)).toEqual(['餐饮'])
+    expect(result.value.trend[11].expenseFen).toBe(2850)
+  }
+  db.close()
+})
+
+test('月份格式不对时给用户一句中文，而不是把 SQL 的错误甩出去', async () => {
+  const db = fresh()
+  const result = await statsHandlers(db).overview('2026-13')
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toMatch(/[一-鿿]/)
+  db.close()
+})
+
+test('数据库关掉后取统计也是 ok:false 而不是漏异常', async () => {
+  const db = fresh()
+  const h = statsHandlers(db)
+  db.close()
+
+  const result = await h.overview('2026-10')
+  expect(result.ok).toBe(false)
+  if (!result.ok) expect(result.message).toMatch(/[一-鿿]/)
+})
+
+test('统计通道名和界面契约对得上（写错通道名不会报错，只会静默失效）', () => {
+  expect(STATS_CHANNELS.overview).toBe('stats:overview')
+})
+
+test('统计通道名唯一（重复会让两个功能接到同一个处理器上）', () => {
+  const names = Object.values(STATS_CHANNELS)
+  expect(new Set(names).size).toBe(names.length)
+})
+
+test('三个模块的通道名互不重名（跨模块重名会静默串线）', () => {
+  const all = [
+    ...Object.values(CATEGORY_CHANNELS),
+    ...Object.values(TRANSACTION_CHANNELS),
+    ...Object.values(STATS_CHANNELS)
+  ]
+  expect(new Set(all).size).toBe(all.length)
 })

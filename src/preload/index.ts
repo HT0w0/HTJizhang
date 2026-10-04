@@ -8,7 +8,7 @@ import type {
   ListTransactionsInput,
   UpdateTransactionInput
 } from '@shared/types'
-import { CATEGORY_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+import { CATEGORY_CHANNELS, STATS_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
 /**
  * 把一个 IPC 调用包成「失败就抛干净中文错误」的形式。
@@ -51,6 +51,9 @@ const api: HtApi = {
     update: (input: UpdateTransactionInput) => call(TRANSACTION_CHANNELS.update, input),
     remove: (id: number) => call(TRANSACTION_CHANNELS.remove, id),
     months: () => call(TRANSACTION_CHANNELS.months)
+  },
+  stats: {
+    overview: (month: string) => call(STATS_CHANNELS.overview, month)
   }
 }
 

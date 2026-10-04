@@ -21,6 +21,7 @@ import type {
   CreateTransactionInput,
   IpcResult,
   ListTransactionsInput,
+  StatsOverview,
   Transaction,
   TransactionListItem,
   UpdateTransactionInput
@@ -46,6 +47,7 @@ import {
   setCategoryIcon,
   usageCounts
 } from './db/categories'
+import { statsOverview } from './db/stats'
 
 export interface CategoryHandlers {
   list(): Promise<IpcResult<CategoryNode[]>>
@@ -115,7 +117,7 @@ export function categoryHandlers(db: DatabaseSync): CategoryHandlers {
   }
 }
 
-export { CATEGORY_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
+export { CATEGORY_CHANNELS, STATS_CHANNELS, TRANSACTION_CHANNELS } from '@shared/ipcChannels'
 
 export interface TransactionHandlers {
   create(input: CreateTransactionInput): Promise<IpcResult<Transaction>>
@@ -144,5 +146,22 @@ export function transactionHandlers(db: DatabaseSync): TransactionHandlers {
     update: async (input) => guard(() => updateTransaction(db, input)),
     remove: async (id) => guard(() => deleteTransaction(db, id)),
     months: async () => guard(() => monthsWithData(db))
+  }
+}
+
+export interface StatsHandlers {
+  overview(month: string): Promise<IpcResult<StatsOverview>>
+}
+
+/**
+ * 统计的 IPC 处理器。
+ *
+ * 统计页一次只调这一个通道（卡片、饼图、排行、趋势全在这一个返回值里）。
+ * 分四次取的话，四次之间用户刚好记了一笔，就会出现「卡片写 100 元、
+ * 饼图加起来 120 元」这种对不上、且**当场看不出来**的数字。
+ */
+export function statsHandlers(db: DatabaseSync): StatsHandlers {
+  return {
+    overview: async (month) => guard(() => statsOverview(db, month))
   }
 }
