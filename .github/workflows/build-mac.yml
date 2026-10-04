@@ -142,6 +142,42 @@ jobs:
             exit 1
           fi
 
+      # ---------------------------------------------------------------------
+      # 代码签名自检 —— 把「到底签没签」变成日志里看得见的事实。
+      #
+      # 为什么需要：苹果 M 系列芯片（arm64）对「程序有没有签名」比 Intel 机器严格得多。
+      # 没买证书时 electron-builder 会**完全跳过签名**（日志里那句
+      # skipped macOS application code signing），这样出来的包在部分 Mac 上会直接打不开，
+      # 而用户看到的提示是「已损坏，无法打开」—— 看起来像文件坏了，其实不是。
+      #
+      # ⚠️ 这一步是**诊断**，不是关卡：它只把状态打到日志里，不会让打包失败
+      #    （签名缺失是这个项目的已知取舍 §八 第 7 阶段，不是意外）。
+      # ⚠️ 它能证明的只有「签名状态如何」。**它证明不了「在真 Mac 上装得上、跑得起来」** ——
+      #    那需要一台真的苹果电脑，本机和云端都没有。
+      # ---------------------------------------------------------------------
+      - name: 检查签名状态（只诊断，不拦）
+        run: |
+          APP=release/mac-universal/HTJizhang.app
+
+          echo "=== 主程序里有哪几种芯片的代码 ==="
+          lipo -archs "$APP/Contents/MacOS/HTJizhang" || true
+
+          echo
+          echo "=== 这个程序有没有签名 ==="
+          codesign -dv --verbose=4 "$APP" 2>&1 || true
+
+          echo
+          echo "=== 签名是否完好 ==="
+          if codesign --verify --deep --strict --verbose=2 "$APP" 2>&1; then
+            echo "→ 签名完好"
+          else
+            echo "→ 签名校验没通过（没签名或不完整）"
+          fi
+
+          echo
+          echo "=== 系统的安全闸门怎么判它 ==="
+          spctl --assess --type execute --verbose=4 "$APP" 2>&1 || true
+
       # 顺手存一份到本次运行的「产物」里。万一下面上传 Releases 失败，
       # 这个包还能从这里下下来，不用重新打包等十分钟。
       - name: 存一份打包产物
