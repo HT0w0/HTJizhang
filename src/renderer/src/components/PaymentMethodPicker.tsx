@@ -5,12 +5,18 @@ import { PAYMENT_METHODS, paymentMethodLabel } from '@shared/paymentMethods'
 interface PaymentMethodPickerProps {
   readonly value: PaymentMethod
   readonly onChange: (next: PaymentMethod) => void
+  /**
+   * 测试标识前缀，规则同 AmountInput 的 testId：**必须全局唯一**。
+   * 记账页用默认值 `payment`，编辑弹窗传 `edit-payment`。
+   */
+  readonly testIdPrefix?: string
 }
 
 /** 一排支付方式按钮。日常最常用的排在前面（顺序由 PAYMENT_METHODS 决定）。 */
 export default function PaymentMethodPicker({
   value,
-  onChange
+  onChange,
+  testIdPrefix = 'payment'
 }: PaymentMethodPickerProps): JSX.Element {
   return (
     <div className="flex flex-wrap gap-2">
@@ -20,7 +26,7 @@ export default function PaymentMethodPicker({
           <button
             key={method}
             type="button"
-            data-testid={`payment-${method}`}
+            data-testid={`${testIdPrefix}-${method}`}
             aria-pressed={active}
             onClick={() => onChange(method)}
             className={`rounded-lg px-3 py-1.5 text-sm transition-colors ${

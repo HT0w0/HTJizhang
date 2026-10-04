@@ -151,6 +151,7 @@ export default function EditTransactionDialog({
 
           <div className="mt-5">
             <AmountInput
+              testId="edit-amount"
               value={amountText}
               onChange={(next) => {
                 setAmountText(next)
@@ -219,6 +220,7 @@ export default function EditTransactionDialog({
 
             <span className="text-sm text-slate-500 dark:text-slate-400">支付</span>
             <PaymentMethodPicker
+              testIdPrefix="edit-payment"
               value={paymentMethod}
               onChange={(next) => {
                 setPaymentMethod(next)

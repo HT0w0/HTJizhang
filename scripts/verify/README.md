@@ -12,7 +12,12 @@ npm run build
 # 2. 逐个跑（每个脚本自己会启动 Electron、跑完自己关掉）
 env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查数据库读写链路.mjs"
 env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查分类管理界面.mjs"
+env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查记账页.mjs"
+env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查账单页.mjs"
 ```
+
+**跑之前先把残留的 Electron 关掉**（`taskkill //F //IM electron.exe`）。
+上一次没退干净的进程会占着数据库文件，脚本第一步删库就会报 `EPERM, Permission denied`。
 
 `env -u ELECTRON_RUN_AS_NODE` **不能省**：本机环境设了这个变量，会导致 Electron
 退化成普通 Node、不弹窗口也不建渲染进程，脚本会一直等到超时。
@@ -25,6 +30,8 @@ env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查分类管理界面.mjs"
 |---|---|
 | `检查数据库读写链路.mjs` | 真启动打包版本，经 CDP 在渲染进程里调 `window.ht.categories.*`：读分类树、新建、改名、排序、归档、恢复、失败时的中文提示，以及数据库文件确实建在 `%APPDATA%\HTJizhang\` |
 | `检查分类管理界面.mjs` | 用**真实点击**驱动设置页：切收支页签、选大类、点 ↑↓ 排序、大类与小类的改名、输入重名看报错、删除弹确认框、取消不删、确认后进「已删除」、点恢复回来、删整个大类并一键恢复内置分类、归档掉最后一个小类的空状态 |
+| `检查记账页.mjs` | 记账页：键盘直接输金额、全角数字、非法字符被挡、两级分类、最近用过置顶、就地新建小类、保存后清空保留日期与支付方式、连点只记一笔、日期真的按本地日期串落库 |
+| `检查账单页.mjs` | 账单页：按天分组与当天小计、金额符号与**红/绿色相**、底部合计、全部/支出/收入筛选、搜索（备注 + 分类名，**`%` 与 `_` 按字面找**）、翻月与**跨年**、编辑窗口预填与保存、切收支类型时清掉分类、绕开界面直接调 IPC 撞类型不匹配、删除确认与合计跟着更新、重开软件后改动还在 |
 | `检查批处理文件行尾.mjs`（`npm run check:bat`） | 所有 `.bat` 是不是 CRLF 行尾 |
 
 ## 用户实际是怎么打开软件的？
@@ -51,4 +58,15 @@ env -u ELECTRON_RUN_AS_NODE node "scripts/verify/检查分类管理界面.mjs"
 - 点击后必须等一帧。带 `transition-colors` 的元素要等过 150ms，否则读到的是过渡中间态。
 - `innerText` 在弹性布局里会把图标和文字拆成两行，比较前先归一化空白。
 - Tailwind v4 输出 `oklch()` 色彩空间，不是 `rgb()`。
+  判断红/绿**别去比 rgb**，改读 `getComputedStyle(el).color` 里的**色相**（`oklch` 的第三个数）：
+  红在 22 度附近、绿在 152 度附近，差别很大；明暗主题会改亮度和彩度，但不会改色相。
 - 不要用「注入子元素」判断节点是否被卸载——React 会清掉它不认识的多余节点，会误报。
+- **`data-testid` 不能跨页面重名，弹窗里的尤其容易撞。** 四个页面是常驻挂载的
+  （见 `App.tsx`），所以任何新弹窗里出现的输入框，只要复用了记账页的组件并沿用默认标识，
+  文档里就会同时存在两个同名元素：`querySelector` 会抓到记账页那个（还藏在 `hidden` 里），
+  脚本会以为自己在验证弹窗。`AmountInput` / `PaymentMethodPicker` 现在都能传
+  `testId` / `testIdPrefix`，弹窗传 `edit-*`。`CategoryPicker` 的 `pick-*` 因为到处都在用，
+  改不了名字，只能在 `edit-dialog` 子树里找（`window.__T.inScope`）。
+- **取值的方法要能容忍元素不存在。** 标识一旦写错，`one(...).textContent` 会直接抛错、
+  中止整个脚本，后面还没跑的检查项全被遮住——你看到的是一行报错，而不是「哪几项失败了」。
+  所以用 `window.__T.text/val/attr/disabled` 这些取不到就返回 `null` 的方法。
