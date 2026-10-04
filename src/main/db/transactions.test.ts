@@ -6,7 +6,11 @@ import {
   createTransaction,
   getTransaction,
   recentCategoryIds,
-  DEFAULT_RECENT_LIMIT
+  DEFAULT_RECENT_LIMIT,
+  listTransactions,
+  updateTransaction,
+  deleteTransaction,
+  monthsWithData
 } from './transactions'
 
 function fresh(): DatabaseSync {
@@ -314,5 +318,423 @@ test('新记的一笔会立刻变成「最近用过」的第一个（保存后�
   const db = fresh()
   const first = createTransaction(db, valid(db))
   expect(recentCategoryIds(db)[0]).toBe(first.categoryId)
+  db.close()
+})
+
+// ---------------------------------------------------------------------------
+// 第 4 阶段：列表查询 / 编辑 / 删除 / 有账的月份
+// ---------------------------------------------------------------------------
+
+/** 往某个分类下记一小笔，省得每行都写一长串。 */
+function spend(
+  db: DatabaseSync,
+  occurredOn: string,
+  note: string,
+  key = 'expense/餐饮/午餐',
+  amountFen = 1000
+): number {
+  return createTransaction(db, {
+    kind: 'expense',
+    amountFen,
+    categoryId: idOf(db, key),
+    occurredOn,
+    note,
+    paymentMethod: 'wechat'
+  }).id
+}
+
+function earn(db: DatabaseSync, occurredOn: string, note: string, amountFen = 500000): number {
+  return createTransaction(db, {
+    kind: 'income',
+    amountFen,
+    categoryId: idOf(db, 'income/工资薪酬/月薪'),
+    occurredOn,
+    note,
+    paymentMethod: 'bank'
+  }).id
+}
+
+test('listTransactions 只返回指定月份的账', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '十月')
+  spend(db, '2026-09-30', '九月')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows.map((r) => r.note)).toEqual(['十月'])
+  db.close()
+})
+
+test('listTransactions 带出小类名、大类名和大类图标', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows[0].categoryName).toBe('午餐')
+  expect(rows[0].majorName).toBe('餐饮')
+  expect(rows[0].majorIcon).toBe('🍜')
+  db.close()
+})
+
+test('listTransactions 按日期从新到旧，同一天内后记的在前', () => {
+  const db = fresh()
+  const first = spend(db, '2026-10-03', '先记')
+  const second = spend(db, '2026-10-03', '后记')
+  spend(db, '2026-10-05', '最新')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows.map((r) => r.note)).toEqual(['最新', '后记', '先记'])
+  expect(rows[1].id).toBe(second)
+  expect(rows[2].id).toBe(first)
+  db.close()
+})
+
+test('listTransactions 能按收支筛选', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '花')
+  earn(db, '2026-10-03', '赚')
+
+  expect(
+    listTransactions(db, { month: '2026-10', kind: 'expense', keyword: '' }).map((r) => r.note)
+  ).toEqual(['花'])
+  expect(
+    listTransactions(db, { month: '2026-10', kind: 'income', keyword: '' }).map((r) => r.note)
+  ).toEqual(['赚'])
+  expect(listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })).toHaveLength(2)
+  db.close()
+})
+
+test('listTransactions 搜备注', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '麦当劳')
+  spend(db, '2026-10-03', '食堂')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '麦当劳' })
+  expect(rows.map((r) => r.note)).toEqual(['麦当劳'])
+  db.close()
+})
+
+test('listTransactions 搜小类名（没写备注也能按分类找到）', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '', 'expense/交通/打车网约车', 3000)
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '打车' })
+  expect(rows).toHaveLength(1)
+  expect(rows[0].categoryName).toBe('打车网约车')
+  db.close()
+})
+
+test('listTransactions 搜大类名（能搜出一整个大类下的账）', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '', 'expense/餐饮/午餐')
+  spend(db, '2026-10-04', '', 'expense/餐饮/晚餐')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '餐饮' })
+  expect(rows).toHaveLength(2)
+  db.close()
+})
+
+test('listTransactions 的关键词里带 % 时不当通配符（否则搜「%」会返回全部）', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '双十一 50% 折扣')
+  spend(db, '2026-10-03', '食堂')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '%' })
+  expect(rows.map((r) => r.note)).toEqual(['双十一 50% 折扣'])
+  db.close()
+})
+
+test('listTransactions 的关键词里带 _ 时不当通配符', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', 'a_b')
+  spend(db, '2026-10-03', 'axb')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: 'a_b' })
+  expect(rows.map((r) => r.note)).toEqual(['a_b'])
+  db.close()
+})
+
+test('listTransactions 的关键词里带反斜杠时按字面找', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', 'C:\\Users')
+  spend(db, '2026-10-03', 'D:/Users')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: 'C:\\Users' })
+  expect(rows).toHaveLength(1)
+  db.close()
+})
+
+test('listTransactions 空月份返回空数组，不抛错', () => {
+  const db = fresh()
+  expect(listTransactions(db, { month: '2020-01', kind: 'all', keyword: '' })).toEqual([])
+  db.close()
+})
+
+test('listTransactions 月份格式不对时抛中文错', () => {
+  const db = fresh()
+  expect(() => listTransactions(db, { month: '2026-13', kind: 'all', keyword: '' })).toThrow(/月份/)
+  expect(() => listTransactions(db, { month: '瞎写的', kind: 'all', keyword: '' })).toThrow(/月份/)
+  db.close()
+})
+
+test('listTransactions 也能查到已归档分类下的历史账单（归档不能让旧账消失）', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '归档前记的')
+  db.prepare('UPDATE categories SET is_archived = 1 WHERE id = ?').run(
+    idOf(db, 'expense/餐饮/午餐')
+  )
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows).toHaveLength(1)
+  expect(rows[0].categoryName).toBe('午餐')
+  db.close()
+})
+
+test('listTransactions 跨月边界：1 号和最后一天都算本月，上月最后一天不算', () => {
+  const db = fresh()
+  spend(db, '2026-09-30', '上月最后一天')
+  spend(db, '2026-10-01', '本月第一天')
+  spend(db, '2026-10-31', '本月最后一天')
+  spend(db, '2026-11-01', '下月第一天')
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows.map((r) => r.note)).toEqual(['本月最后一天', '本月第一天'])
+  db.close()
+})
+
+test('listTransactions 闰年 2 月 29 号能被查到', () => {
+  const db = fresh()
+  spend(db, '2024-02-29', '闰日')
+
+  const rows = listTransactions(db, { month: '2024-02', kind: 'all', keyword: '' })
+  expect(rows.map((r) => r.note)).toEqual(['闰日'])
+  db.close()
+})
+
+test('updateTransaction 改金额、日期、备注、支付方式', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+
+  const updated = updateTransaction(db, {
+    id: created.id,
+    kind: 'expense',
+    amountFen: 2500,
+    categoryId: idOf(db, 'expense/餐饮/午餐'),
+    occurredOn: '2026-10-05',
+    note: '新备注',
+    paymentMethod: 'cash'
+  })
+
+  expect(updated.id).toBe(created.id)
+  expect(updated.amountFen).toBe(2500)
+  expect(updated.occurredOn).toBe('2026-10-05')
+  expect(updated.note).toBe('新备注')
+  expect(updated.paymentMethod).toBe('cash')
+  db.close()
+})
+
+test('updateTransaction 改分类', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+
+  const updated = updateTransaction(db, {
+    id: created.id,
+    kind: 'expense',
+    amountFen: created.amountFen,
+    categoryId: idOf(db, 'expense/餐饮/晚餐'),
+    occurredOn: created.occurredOn,
+    note: created.note,
+    paymentMethod: created.paymentMethod
+  })
+  expect(updated.categoryId).toBe(idOf(db, 'expense/餐饮/晚餐'))
+  db.close()
+})
+
+test('updateTransaction 备注也会被洗（换行压成空格）', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  const updated = updateTransaction(db, {
+    ...valid(db),
+    id: created.id,
+    note: '  公司楼下\n快餐  '
+  })
+  expect(updated.note).toBe('公司楼下 快餐')
+  db.close()
+})
+
+test('updateTransaction 把支出改成收入、且换成收入分类时成功', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+
+  const updated = updateTransaction(db, {
+    id: created.id,
+    kind: 'income',
+    amountFen: 1500000,
+    categoryId: idOf(db, 'income/工资薪酬/月薪'),
+    occurredOn: '2026-10-03',
+    note: '',
+    paymentMethod: 'bank'
+  })
+  expect(updated.kind).toBe('income')
+  expect(updated.categoryId).toBe(idOf(db, 'income/工资薪酬/月薪'))
+  db.close()
+})
+
+test('updateTransaction 把支出改成收入、却没换分类时必须报中文错', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+
+  expect(() =>
+    updateTransaction(db, {
+      ...valid(db),
+      id: created.id,
+      kind: 'income',
+      amountFen: 1000,
+      categoryId: idOf(db, 'expense/餐饮/午餐')
+    })
+  ).toThrow('收入不能记在支出分类下')
+
+  // 失败后数据库里的那一笔必须原样不动
+  const after = getTransaction(db, created.id)
+  expect(after?.kind).toBe('expense')
+  expect(after?.amountFen).toBe(2850)
+  db.close()
+})
+
+test('updateTransaction 金额为 0 时报错，且不动原来的数据', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+
+  expect(() =>
+    updateTransaction(db, { ...valid(db), id: created.id, amountFen: 0 })
+  ).toThrow('金额必须大于 0')
+  expect(getTransaction(db, created.id)?.amountFen).toBe(2850)
+  db.close()
+})
+
+test('updateTransaction 金额是小数时报错（金额只能以「分」为整数存）', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  expect(() =>
+    updateTransaction(db, { ...valid(db), id: created.id, amountFen: 12.5 })
+  ).toThrow(/整数/)
+  db.close()
+})
+
+test('updateTransaction 日期格式不对时报中文错', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  expect(() =>
+    updateTransaction(db, { ...valid(db), id: created.id, occurredOn: '2026/10/03' })
+  ).toThrow(/日期/)
+  db.close()
+})
+
+test('updateTransaction 日历上不存在的日期也拒绝（2026-02-30）', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  expect(() =>
+    updateTransaction(db, { ...valid(db), id: created.id, occurredOn: '2026-02-30' })
+  ).toThrow(/日期/)
+  db.close()
+})
+
+test('updateTransaction 支付方式非法时报中文错', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  expect(() =>
+    updateTransaction(db, {
+      ...valid(db),
+      id: created.id,
+      paymentMethod: '微信' as never
+    })
+  ).toThrow(/支付方式/)
+  db.close()
+})
+
+test('updateTransaction 备注超长时报中文错，并说清现在有几个字', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  expect(() =>
+    updateTransaction(db, { ...valid(db), id: created.id, note: '字'.repeat(201) })
+  ).toThrow(/备注最多 200 个字，现在有 201 个/)
+  db.close()
+})
+
+test('updateTransaction 改不存在的账单时报中文错', () => {
+  const db = fresh()
+  expect(() => updateTransaction(db, { ...valid(db), id: 999999 })).toThrow('这笔账不存在')
+  db.close()
+})
+
+test('updateTransaction 不动别的账单', () => {
+  const db = fresh()
+  const keep = createTransaction(db, { ...valid(db), note: '别动我', amountFen: 111 })
+  const target = createTransaction(db, { ...valid(db), note: '改我', amountFen: 222 })
+
+  updateTransaction(db, { ...valid(db), id: target.id, note: '改好了', amountFen: 999 })
+
+  expect(getTransaction(db, keep.id)?.amountFen).toBe(111)
+  expect(getTransaction(db, keep.id)?.note).toBe('别动我')
+  db.close()
+})
+
+test('updateTransaction 会更新 updated_at，但不动 created_at', () => {
+  const db = fresh()
+  const created = createTransaction(db, valid(db))
+  const updated = updateTransaction(db, { ...valid(db), id: created.id, note: '改过了' })
+  expect(updated.createdAt).toBe(created.createdAt)
+  expect(updated.updatedAt >= created.updatedAt).toBe(true)
+  db.close()
+})
+
+test('deleteTransaction 删掉指定的那一笔，别的留着', () => {
+  const db = fresh()
+  const keep = spend(db, '2026-10-03', '留')
+  const drop = spend(db, '2026-10-03', '删')
+
+  deleteTransaction(db, drop)
+
+  const rows = listTransactions(db, { month: '2026-10', kind: 'all', keyword: '' })
+  expect(rows.map((r) => r.id)).toEqual([keep])
+  db.close()
+})
+
+test('deleteTransaction 删不存在的账单时报中文错', () => {
+  const db = fresh()
+  expect(() => deleteTransaction(db, 999999)).toThrow('这笔账不存在')
+  db.close()
+})
+
+test('deleteTransaction 删两次，第二次报同样的中文错（不能静默成功）', () => {
+  const db = fresh()
+  const id = spend(db, '2026-10-03', '')
+  deleteTransaction(db, id)
+  expect(() => deleteTransaction(db, id)).toThrow('这笔账不存在')
+  db.close()
+})
+
+test('monthsWithData 列出有账的月份，从新到旧，且不重复', () => {
+  const db = fresh()
+  spend(db, '2026-10-03', '')
+  spend(db, '2026-08-15', '')
+  spend(db, '2026-10-20', '')
+  earn(db, '2025-12-31', '')
+
+  expect(monthsWithData(db)).toEqual(['2026-10', '2026-08', '2025-12'])
+  db.close()
+})
+
+test('monthsWithData 一笔账都没有时返回空数组', () => {
+  const db = fresh()
+  expect(monthsWithData(db)).toEqual([])
+  db.close()
+})
+
+test('monthsWithData 删光之后，那个月就不在列表里了', () => {
+  const db = fresh()
+  const id = spend(db, '2026-10-03', '')
+  spend(db, '2026-11-03', '')
+  deleteTransaction(db, id)
+  expect(monthsWithData(db)).toEqual(['2026-11'])
   db.close()
 })

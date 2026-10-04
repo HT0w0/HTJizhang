@@ -58,6 +58,27 @@ export interface CreateTransactionInput {
   readonly paymentMethod: PaymentMethod
 }
 
+/** 查账单列表的条件。三个条件之间是「并且」的关系。 */
+export interface ListTransactionsInput {
+  /** 'YYYY-MM'，只看这个月 */
+  readonly month: string
+  /** 'all' 表示收支都看 */
+  readonly kind: CategoryKind | 'all'
+  /** 关键词。空串表示不搜。搜备注、小类名、大类名三处。 */
+  readonly keyword: string
+}
+
+/** 改一笔账。id 指定改哪一笔，其余字段和新建时一样。 */
+export interface UpdateTransactionInput {
+  readonly id: number
+  readonly kind: CategoryKind
+  readonly amountFen: number
+  readonly categoryId: number
+  readonly occurredOn: string
+  readonly note: string
+  readonly paymentMethod: PaymentMethod
+}
+
 /** 一条分类。parentId 为 null 表示一级大类，非 null 表示二级小类。 */
 export interface Category {
   readonly id: number
