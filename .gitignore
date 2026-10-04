@@ -16,7 +16,7 @@ release/
 .vitest/
 .electron-builder-cache/
 
-# 验证脚本的隔离数据目录（绝不指向用户账本，见 CLAUDE.md §九）
+# 验证脚本的隔离数据目录（绝不指向用户账本，见 scripts/verify/README.md）
 .verify-data/
 
 # 日志与系统文件
