@@ -1,0 +1,70 @@
+# electron-builder 打包配置（第 7 阶段）
+#
+# 打包分两步：先把源码编译进 out/（npm run build），再由 electron-builder 把 out/
+# 和 Electron 运行时一起装进安装包。`npm run build:win` 把这两步连起来做。
+#
+# 产物在 release/ 下。Windows 出 NSIS 安装程序（.exe），macOS 出 .dmg（第 8 阶段，
+# 只能在苹果电脑或 GitHub 云端机器上跑）。
+
+appId: com.ht0w0.htjizhang
+
+# exe 文件属性里显示的版权。署名与 LICENSE 保持一致。
+# ⚠️ 这个键只能放在**最顶层**：electron-builder 26 的 schema 里 win 一节
+# 不接受 copyright（写进 win 里会让整个打包配置校验失败，报的却是一句
+# 「configuration.win should be one of these: null」—— 完全指不到这一行）。
+copyright: Copyright © 2026 HT0w0
+
+# ⚠️ 必须是纯 ASCII 的 HTJizhang（CLAUDE.md §5.7）。
+# 这个值会渗进安装目录名、可执行文件名、开始菜单的文件夹名、注册表项 ——
+# 中文名会让部分工具处理不了，而且实测出现过数据目录跟着漂移的坑（§5.16）。
+# 用户看到的中文名「HT记账」在下面 nsis 一节单独指定。
+productName: HTJizhang
+
+directories:
+  buildResources: build
+  output: release
+
+# 打进安装包的内容。
+# 渲染进程的 React / Recharts 已经被 Vite 打包进 out/renderer 里了，
+# 所以运行时**不需要 node_modules**（dependencies 里那三个包一个都不会被 require）。
+files:
+  - out/**
+  - package.json
+
+win:
+  target:
+    - target: nsis
+      arch: [x64]
+  icon: build/icon.ico
+
+nsis:
+  # 装到「当前用户」下，**不需要管理员密码**，也不弹 UAC 授权框。
+  # 公司电脑、没有管理员权限的电脑上，装不上是最常见的失败原因，这一项直接绕开它。
+  perMachine: false
+
+  # 给用户一个「选择安装位置」的步骤；一路「下一步」也能装完。
+  oneClick: false
+  allowToChangeInstallationDirectory: true
+
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+  # 快捷方式用中文名。程序内部名（HTJizhang）和用户看到的名字（HT记账）在这里分开。
+  shortcutName: HT记账
+  # 「应用和功能」（控制面板）里显示的名字。不设的话会显示成 HTJizhang。
+  uninstallDisplayName: HT记账
+
+  # ⚠️ 绝对不要改成 true。
+  # 账本存在 %APPDATA%\HTJizhang\ 下 —— 那是**用户的全部记账数据**。
+  # 改成 true 之后，卸载软件会把用户的账本一并删掉，而且不可恢复。
+  deleteAppDataOnUninstall: false
+
+  # 安装包文件名用 ASCII：下载链接里带中文容易出乱码。
+  artifactName: HTJizhang-${version}-setup.${ext}
+
+# ---------------------------------------------------------------------------
+# macOS（第 8 阶段）
+#
+# 只能在苹果电脑或 GitHub 云端 macOS 机器上跑，本地 Windows 出不了 .dmg。
+# 到第 8 阶段再写，届时还要定：是否出 universal（Intel + Apple 芯片合一个包）、
+# 应用分类、以及未签名情况下的「已损坏」处理说明。
+# ---------------------------------------------------------------------------

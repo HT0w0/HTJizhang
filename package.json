@@ -1,22 +1,25 @@
 {
   "name": "ht-jizhang",
   "productName": "HTJizhang",
-  "version": "0.1.0",
-  "description": "HT记账 — 本地个人记账桌面软件",
-  "author": "HT",
-  "license": "UNLICENSED",
+  "version": "1.0.0",
+  "description": "HT记账 — 完全本地、不联网的个人记账桌面软件",
+  "author": "HT0w0",
+  "license": "MIT",
   "private": true,
   "main": "./out/main/index.js",
   "scripts": {
     "dev": "electron-vite dev",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
+    "build:win": "npm run build && electron-builder --win",
+    "build:mac": "npm run build && electron-builder --mac",
     "typecheck:node": "tsc --noEmit -p tsconfig.node.json --composite false",
     "typecheck:web": "tsc --noEmit -p tsconfig.web.json --composite false",
     "typecheck": "npm run typecheck:node && npm run typecheck:web",
     "test": "vitest run",
     "test:watch": "vitest",
-    "check:bat": "node scripts/verify/检查批处理文件行尾.mjs"
+    "check:bat": "node scripts/verify/检查批处理文件行尾.mjs",
+    "icons": "electron scripts/make-icons.mjs"
   },
   "dependencies": {
     "react": "^19.3.0",
@@ -30,6 +33,7 @@
     "@types/react-dom": "^19.3.0",
     "@vitejs/plugin-react": "^5.2.0",
     "electron": "44.5.1",
+    "electron-builder": "^26.0.0",
     "electron-vite": "^5.0.0",
     "tailwindcss": "^4.3.3",
     "typescript": "^5.9.3",

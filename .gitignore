@@ -7,6 +7,10 @@ dist/
 release/
 *.tsbuildinfo
 
+# 反向辨识工具（scripts/verify/反向辨识-打包产物.mjs）临时备份的打包产物。
+# 正常情况下它会自己删掉；万一中途被打断，别把几十 MB 的 asar 提交上去。
+*.反向辨识备份
+
 # 打包工具缓存
 .vite/
 .vitest/
@@ -28,3 +32,7 @@ Thumbs.db
 
 # AI 执行计划的临时工作区
 .superpowers/
+
+# 图标候选图（scripts/make-icons.mjs 生成，给用户挑选用的一次性产物）。
+# 选定之后那个图形会进 build/icon.png，由 electron-builder 用作程序图标。
+图标方案/
