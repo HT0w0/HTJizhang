@@ -150,8 +150,12 @@ jobs:
       # skipped macOS application code signing），这样出来的包在部分 Mac 上会直接打不开，
       # 而用户看到的提示是「已损坏，无法打开」—— 看起来像文件坏了，其实不是。
       #
-      # ⚠️ 这一步是**诊断**，不是关卡：它只把状态打到日志里，不会让打包失败
-      #    （签名缺失是这个项目的已知取舍 §八 第 7 阶段，不是意外）。
+      # 2026-10-04：正因为拿不准「完全没签名到底行不行」，才加了这一步实测。
+      # 实测结果（见 §八 第 8 阶段）：`code object is not signed at all`、`spctl` 判 rejected。
+      # 于是 electron-builder.yml 的 mac 一节加了 `identity: "-"`（临时签名）。
+      # 这一步**留着**，因为它同时是那次改动的验证手段 —— 下一次跑就能看出签名有没有真的生效。
+      #
+      # ⚠️ 它是**诊断**，不是关卡：只把状态打到日志里，不让打包失败。
       # ⚠️ 它能证明的只有「签名状态如何」。**它证明不了「在真 Mac 上装得上、跑得起来」** ——
       #    那需要一台真的苹果电脑，本机和云端都没有。
       # ---------------------------------------------------------------------
@@ -173,6 +177,34 @@ jobs:
           else
             echo "→ 签名校验没通过（没签名或不完整）"
           fi
+
+          # -----------------------------------------------------------------
+          # 把**实际写进包里的豁免**打出来。
+          #
+          # 为什么单独查这一项：临时签名会让 hardened runtime 触发「库校验」，
+          # 它会拒绝加载 Team ID 不同的 Electron 框架 —— 结果是软件一启动就崩。
+          # 修法是那几条豁免（见 electron-builder.yml 的 mac 一节）。
+          #
+          # 我读过 electron-builder 的源码，知道它内置模板里有这些豁免；
+          # 但**「我读过源码」不是证据**，「日志里打出来了」才是。这两行就是把它变成证据。
+          # 尤其要确认 disable-library-validation 在 —— 少这一条，包能打出来但跑不起来，
+          # 而那种问题本机根本发现不了。
+          # -----------------------------------------------------------------
+          echo
+          echo "=== 实际写进包里的豁免（是否含 disable-library-validation）==="
+          codesign -d --entitlements :- "$APP" 2>/dev/null || echo "（取不到）"
+
+          echo
+          echo "=== Helper 子进程有没有被一起签上 ==="
+          # Electron 的软件不止一个可执行文件，还有几个 Helper。
+          # 只签主程序、漏掉 Helper 的话，界面能出来但功能会莫名其妙地崩。
+          find "$APP/Contents/Frameworks" -maxdepth 2 -name "*.app" 2>/dev/null | while read -r helper; do
+            if codesign --verify "$helper" 2>/dev/null; then
+              echo "  ✓ $(basename "$helper")"
+            else
+              echo "  ✗ $(basename "$helper")  ← 没签上"
+            fi
+          done
 
           echo
           echo "=== 系统的安全闸门怎么判它 ==="

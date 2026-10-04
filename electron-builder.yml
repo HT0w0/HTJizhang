@@ -84,6 +84,43 @@ mac:
   # Finder 里「显示简介 → 种类」那一栏显示成「财务」。不设就是一串内部编号。
   category: public.app-category.finance
 
+  # ---------------------------------------------------------------------------
+  # 临时签名（ad-hoc signing，2026-10-04 用户拍板加上）
+  #
+  # `"-"` 是苹果的约定写法，意思是「自己给自己签」，**不花钱、不需要苹果账号**。
+  # 它不会让用户少点一下「仍要打开」—— 那需要花钱买证书（§八 第 7 阶段已拍板不做）。
+  # 它解决的是另一个问题：**完全没签名的包，macOS 判得最重**。
+  #
+  # 2026-10-04 云端实测：加这一行之前，打出来的包 `codesign --verify` 的原话是
+  # 「code object is not signed at all」，`spctl` 判决是 rejected / source=no usable signature。
+  # 那时唯一的「签名」是 Electron 二进制在编译时被链接器顺手盖的章
+  # （flags=adhoc,linker-signed，只盖文件开头一小段，Sealed Resources=none）——
+  # 它只能证明「这文件是苹果工具链产出的」，不能证明「这是 HT记账 且没被动过手脚」。
+  #
+  # ⚠️ 加了临时签名之后**必须同时有下面那几条豁免**，否则软件会启动即崩溃：
+  #    hardenedRuntime 默认是 true，而临时签名 + hardened runtime 会触发
+  #    「库校验」——它拒绝加载 Team ID 不同的 Electron 框架。
+  #    electron-builder 自己的 schema 就是这么写的，原话：
+  #      "When using ad-hoc signing (identity: "-"), hardened runtime enforces
+  #       library validation which will reject pre-signed Electron frameworks that
+  #       carry a different Team ID. To resolve this either set hardenedRuntime: false
+  #       or add the com.apple.security.cs.disable-library-validation entitlement."
+  #
+  #    这里选择「加豁免」而不是关掉 hardenedRuntime。豁免**不需要我们写文件**：
+  #    electron-builder 内置模板 node_modules/app-builder-lib/templates/entitlements.mac.plist
+  #    里已经有全部三条（allow-jit / allow-unsigned-executable-memory /
+  #    disable-library-validation），而 app-builder-lib/out/mac/MacTargetHelper.js 的
+  #    getEntitlements() 在没提供自定义文件时，**主程序和 Helper 子进程都回落到这一份**。
+  #    （2026-10-04 读过源码确认。主程序走第 147-157 行，Helper 走第 162-171 行。）
+  #
+  #    刻意**不**在 build/ 里再放一份自己的 plist：那会是一份和上游可能悄悄脱节的副本，
+  #    而且上游将来补了新的必需豁免，我们那份会把它挡掉。
+  #
+  # ⚠️ 这仍然**不**是「用户不用管了」：spctl 对临时签名的包照样判拒绝。
+  #    真机能不能装上、打开，**本机和云端都证明不了** —— 需要一台真的苹果电脑。
+  # ---------------------------------------------------------------------------
+  identity: "-"
+
   # 文件名用 ASCII、并且一眼能看出是给 Mac 的：
   # Windows 那边叫 HTJizhang-1.0.0-setup.exe，这边叫 HTJizhang-1.0.0-mac.dmg。
   artifactName: HTJizhang-${version}-mac.${ext}
